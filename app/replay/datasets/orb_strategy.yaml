@@ -1,0 +1,37 @@
+version: "1"
+strategy_id: "orb_sample"
+symbol: "AAPL"
+enabled: true
+timeframe: "1m"
+session:
+  timezone: "UTC"
+  market_open: "14:30"
+  market_close: "21:00"
+  opening_range_minutes: 3
+constraints:
+  - kind: once_per_day
+  - kind: within_time
+    params:
+      start: "14:30"
+      end: "16:00"
+  - kind: max_spread_cents
+    params:
+      cents: 5
+  - kind: min_volume
+    params:
+      value: 100
+entry:
+  - kind: crosses_above
+    params:
+      level: opening_range_high
+risk:
+  risk_dollars: 100
+exit:
+  breakeven_trigger_r: 1
+actions:
+  - kind: enter_long
+    params:
+      initial_stop: session_low
+  - kind: move_stop_to_breakeven
+    params:
+      trigger_r: 1

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ibkr-exec-bot"
+version = "0.1.0"
+description = "Safety-first IBKR execution bot for US equities"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116.0",
+  "uvicorn>=0.35.0",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.10.0",
+  "SQLAlchemy>=2.0.43",
+  "PyYAML>=6.0.2",
+  "ibapi>=9.81.1.post1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.0",
+  "pytest-cov>=6.3.0",
+  "httpx>=0.28.0",
+  "mypy>=1.18.0",
+  "ruff>=0.13.0",
+  "types-PyYAML>=6.0.12.20250822",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["app"]
+testpaths = ["app/tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+exclude = "(^|/)(app/tests/|\\.venv/|\\.mypy_cache/|\\.ruff_cache/|\\.pytest_cache/|pytest-cache-files-)"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  ".venv",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".pytest_cache",
+  "pytest-cache-files-*",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

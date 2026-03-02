@@ -1,0 +1,18 @@
+[Unit]
+Description=IBKR Execution Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ibkrbot
+WorkingDirectory=/opt/ibkr-exec-bot
+EnvironmentFile=/opt/ibkr-exec-bot/.env
+ExecStart=/opt/ibkr-exec-bot/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
