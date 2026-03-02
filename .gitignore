@@ -19,6 +19,7 @@ pytest-cache-files-*/
 
 # Local environment files
 .env
+*.db
 
 # OS/editor
 .DS_Store

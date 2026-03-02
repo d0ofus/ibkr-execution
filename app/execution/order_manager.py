@@ -113,6 +113,10 @@ class OrderManager:
             raise ValidationError("realized daily loss cannot be negative")
         self._realized_daily_loss = value
 
+    def set_environment(self, environment: EnvironmentMode) -> None:
+        """Switch execution environment context (paper/live)."""
+        self._environment = environment
+
     def submit_intent(self, intent: OrderIntent) -> str:
         """Submit an order intent and return a trade identifier."""
         validate_intent(intent)
@@ -173,8 +177,8 @@ class OrderManager:
             intent=intent,
             contract=contract,
             quantity=quantity,
-            entry_local_order_id=parent_order_id,
-            stop_local_order_id=stop_order_id,
+            entry_local_order_id=int(broker_order_ids[0]) if broker_order_ids else parent_order_id,
+            stop_local_order_id=int(broker_order_ids[1]) if len(broker_order_ids) > 1 else stop_order_id,
             broker_order_ids=list(broker_order_ids),
             state=TradeState.BROKER_ACKNOWLEDGED,
         )

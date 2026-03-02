@@ -254,6 +254,11 @@ def build_router() -> APIRouter:
     ) -> OrderIntentResponse:
         if runtime.kill_switch:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="kill switch active")
+        if settings.dry_run:
+            return OrderIntentResponse(
+                accepted=False,
+                reason="dry_run is enabled; set DRY_RUN=false to transmit orders",
+            )
 
         mode = _current_mode(settings=settings, runtime=runtime)
         try:
@@ -316,9 +321,11 @@ def build_router() -> APIRouter:
     def kill(
         runtime: ControlPlaneRuntime = Depends(get_runtime),
         registry: StrategyRegistry = Depends(get_strategy_registry),
+        order_manager: OrderManagerLike = Depends(get_order_manager),
     ) -> KillResponse:
         runtime.kill_switch = True
         runtime.live_armed = False
+        _set_order_manager_environment(order_manager, EnvironmentMode.PAPER)
         registry.stop_all()
         return KillResponse(kill_switch=runtime.kill_switch, live_armed=runtime.live_armed)
 
@@ -326,6 +333,7 @@ def build_router() -> APIRouter:
     def arm_live(
         settings: Settings = Depends(get_settings),
         runtime: ControlPlaneRuntime = Depends(get_runtime),
+        order_manager: OrderManagerLike = Depends(get_order_manager),
     ) -> ArmLiveResponse:
         if runtime.kill_switch:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="kill switch active")
@@ -337,6 +345,7 @@ def build_router() -> APIRouter:
             )
 
         runtime.live_armed = True
+        _set_order_manager_environment(order_manager, EnvironmentMode.LIVE)
         return ArmLiveResponse(armed=True, mode=_current_mode(settings=settings, runtime=runtime))
 
     return router
@@ -359,3 +368,9 @@ def _to_pinned_response(item: PinnedContract) -> PinnedContractResponse:
         currency=item.currency,
         is_active=item.is_active,
     )
+
+
+def _set_order_manager_environment(order_manager: OrderManagerLike, environment: EnvironmentMode) -> None:
+    setter = getattr(order_manager, "set_environment", None)
+    if callable(setter):
+        setter(environment)

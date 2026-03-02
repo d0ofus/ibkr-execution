@@ -26,6 +26,11 @@ class Settings(BaseSettings):
 
     min_stop_distance: float = Field(default=0.01, ge=0)
     default_risk_dollars: float = Field(default=100.0, ge=0)
+    max_positions: int = Field(default=10, ge=1)
+    max_notional: float = Field(default=1_000_000.0, gt=0)
+    max_daily_loss: float = Field(default=10_000.0, gt=0)
+    max_orders_per_minute: int = Field(default=120, ge=1)
+    max_trades_per_symbol_per_day: int = Field(default=10, ge=1)
     ibkr_max_requests_per_second: int = Field(default=45, ge=1)
     ibkr_pacing_window_seconds: float = Field(default=1.0, gt=0)
     watchdog_stale_after_seconds: float = Field(default=30.0, gt=0)

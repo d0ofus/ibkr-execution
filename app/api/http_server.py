@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -21,6 +22,10 @@ class ApiDependencies:
     contract_service: Any | None = None
     pinned_contract_reader: Any | None = None
     order_manager: Any | None = None
+    runtime: ControlPlaneRuntime | None = None
+    startup_hooks: list[Callable[[], None]] | None = None
+    shutdown_hooks: list[Callable[[], None]] | None = None
+    app_state: dict[str, Any] | None = None
     memory_logger: PeriodicMemoryLogger | None = None
 
 
@@ -31,23 +36,32 @@ def create_http_app(settings: Settings, dependencies: ApiDependencies | None = N
         interval_seconds=settings.memory_log_interval_seconds
     )
 
+    startup_hooks = deps.startup_hooks or []
+    shutdown_hooks = deps.shutdown_hooks or []
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        for hook in startup_hooks:
+            hook()
         memory_logger.start()
         try:
             yield
         finally:
             memory_logger.stop()
+            for hook in shutdown_hooks:
+                hook()
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
     app.state.settings = settings
-    app.state.runtime = ControlPlaneRuntime()
+    app.state.runtime = deps.runtime or ControlPlaneRuntime()
     app.state.strategy_registry = StrategyRegistry()
     app.state.contract_service = deps.contract_service
     app.state.pinned_contract_reader = deps.pinned_contract_reader
     app.state.order_manager = deps.order_manager
     app.state.memory_logger = memory_logger
+    for key, value in (deps.app_state or {}).items():
+        setattr(app.state, key, value)
 
     app.include_router(build_router())
     return app

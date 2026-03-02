@@ -13,6 +13,28 @@ Phases 0-11 implemented in this repository with deterministic replay coverage an
    `python -m pip --python .\.venv\Scripts\python.exe install -e ".[dev]"`
 3. Run tests:
    `.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider`
+4. Start API:
+   `.\.venv\Scripts\python.exe -m uvicorn app.main:create_application --factory --host 127.0.0.1 --port 8000`
+5. Open API UI:
+   `http://127.0.0.1:8000/docs`
+
+## Paper Trading UI Test Flow
+
+1. Start IB Gateway or TWS with API enabled (`127.0.0.1`, paper port `7497` by default).
+2. Set `DRY_RUN=false` in `.env`.
+3. Start API server (command above).
+4. In Swagger UI:
+   - `POST /contracts/resolve`
+   - `POST /contracts/pin` with `environment=paper`
+   - `POST /orders/intent` to transmit bracket order
+5. Verify orders in IB paper account.
+
+## Live Arming Gate
+
+Live transmission is blocked unless all are true:
+1. `LIVE_TRADING=true`
+2. `ACK_LIVE_TRADING=I_UNDERSTAND`
+3. `POST /arm_live` in current API session
 
 ## Runbook
 

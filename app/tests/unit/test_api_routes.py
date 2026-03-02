@@ -95,7 +95,7 @@ class FakeOrderManager:
         return sorted(self.trades.keys())
 
 
-def _build_client(*, live_trading: bool = False, ack: str = "", dry_run: bool = True) -> tuple[TestClient, FakeContractService, FakeOrderManager]:
+def _build_client(*, live_trading: bool = False, ack: str = "", dry_run: bool = False) -> tuple[TestClient, FakeContractService, FakeOrderManager]:
     settings = Settings(
         live_trading=live_trading,
         ack_live_trading=ack,
@@ -269,3 +269,23 @@ def test_arm_live_requires_env_gates_and_switches_status_mode() -> None:
     )
     assert order.status_code == 200
     assert order.json()["accepted"] is True
+
+
+def test_orders_intent_rejected_when_dry_run_enabled() -> None:
+    client, contract_service, _ = _build_client(dry_run=True)
+    _ = contract_service.pin_contract("AAPL", EnvironmentMode.PAPER, 265598)
+
+    response = client.post(
+        "/orders/intent",
+        json={
+            "symbol": "AAPL",
+            "side": "BUY",
+            "entry_price": "100",
+            "stop_price": "99",
+            "risk_dollars": "100",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is False
+    assert "dry_run" in payload["reason"]
