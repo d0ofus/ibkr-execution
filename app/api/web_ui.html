@@ -116,6 +116,9 @@
       border-top: 1px dashed var(--border);
       padding-top: 8px;
     }
+    .status strong {
+      color: var(--text);
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -296,6 +299,13 @@
         </table>
       </section>
     </div>
+
+    <div class="grid" style="margin-top: 14px;">
+      <section class="card">
+        <h2>Last API Response</h2>
+        <div id="lastApiResponse" class="status">No actions yet.</div>
+      </section>
+    </div>
   </div>
 
   <script>
@@ -315,6 +325,17 @@
       el.textContent = message;
     }
 
+    function stamp() {
+      return new Date().toLocaleTimeString();
+    }
+
+    function showApiResponse(action, payload, isError = false) {
+      const panel = document.getElementById("lastApiResponse");
+      const pretty = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+      panel.className = `status ${isError ? "err" : "ok"}`;
+      panel.innerHTML = `<strong>[${stamp()}] ${action}</strong>\n${pretty}`;
+    }
+
     async function refreshStatus() {
       const panel = document.getElementById("runtimeSummary");
       try {
@@ -328,8 +349,10 @@
           `<div>kill_switch: ${status.kill_switch}</div>`,
           `<div>account: ${status.account || "(not set)"}</div>`
         ].join("");
+        showApiResponse("GET /status", status, false);
       } catch (err) {
         panel.innerHTML = `<span class="err">${err.message}</span>`;
+        showApiResponse("GET /status", String(err.message || err), true);
       }
     }
 
@@ -351,9 +374,11 @@
           body.appendChild(tr);
         }
         log(logPanel, `Resolved ${data.candidates.length} candidate(s). Click a row to use its conId.`, "ok");
+        showApiResponse("POST /contracts/resolve", data, false);
         return data.candidates;
       } catch (err) {
         log(logPanel, `Resolve failed: ${err.message}`, "err");
+        showApiResponse("POST /contracts/resolve", String(err.message || err), true);
         return [];
       }
     }
@@ -409,9 +434,11 @@
         } else {
           log(logPanel, `Rejected: ${result.reason || "unknown"}`, "warn-text");
         }
+        showApiResponse("POST /orders/intent", result, !result.accepted);
         await refreshOpenTrades();
       } catch (err) {
         log(logPanel, `Quick submit failed: ${err.message}`, "err");
+        showApiResponse("Quick Submit", String(err.message || err), true);
       }
     }
 
@@ -467,7 +494,15 @@
     async function strategyAction(path) {
       const strategyId = document.getElementById("strategyInput").value.trim();
       if (!strategyId) return;
-      await api(path, "POST", { strategy_id: strategyId });
+      const panel = document.getElementById("strategyLog");
+      try {
+        const result = await api(path, "POST", { strategy_id: strategyId });
+        log(panel, `${path} succeeded for ${strategyId}`, "ok");
+        showApiResponse(path, result, false);
+      } catch (err) {
+        log(panel, `${path} failed: ${err.message}`, "err");
+        showApiResponse(path, String(err.message || err), true);
+      }
       await refreshStrategies();
     }
 
@@ -486,9 +521,11 @@
         });
         document.getElementById("strategyInput").value = result.strategy_id;
         log(panel, `Saved strategy ${result.strategy_id}.`, "ok");
+        showApiResponse("POST /strategies/upsert", result, false);
         await refreshStrategies();
       } catch (err) {
         log(panel, `Save failed: ${err.message}`, "err");
+        showApiResponse("POST /strategies/upsert", String(err.message || err), true);
       }
     }
 
@@ -504,18 +541,30 @@
         document.getElementById("strategyFormatInput").value = definition.source_format;
         document.getElementById("strategySourceInput").value = definition.source_payload;
         log(panel, `Loaded definition for ${strategyId}.`, "ok");
+        showApiResponse(`GET /strategies/definition/${strategyId}`, definition, false);
       } catch (err) {
         log(panel, `Load failed: ${err.message}`, "err");
+        showApiResponse(`GET /strategies/definition/${strategyId}`, String(err.message || err), true);
       }
     }
 
     async function armLive() {
-      await api("/arm_live", "POST");
+      try {
+        const result = await api("/arm_live", "POST");
+        showApiResponse("POST /arm_live", result, false);
+      } catch (err) {
+        showApiResponse("POST /arm_live", String(err.message || err), true);
+      }
       await refreshStatus();
     }
 
     async function killSwitch() {
-      await api("/kill", "POST");
+      try {
+        const result = await api("/kill", "POST");
+        showApiResponse("POST /kill", result, false);
+      } catch (err) {
+        showApiResponse("POST /kill", String(err.message || err), true);
+      }
       await refreshStatus();
       await refreshStrategies();
     }
