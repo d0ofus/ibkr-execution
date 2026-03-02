@@ -250,6 +250,24 @@ def test_strategies_start_stop_and_kill_switch() -> None:
     assert blocked.status_code == 409
 
 
+def test_strategy_definition_upsert_and_fetch() -> None:
+    client, _, _ = _build_client()
+    payload = {
+        "source_format": "yaml",
+        "source_payload": 'version: "1.0"\nstrategy_id: "orb-test"\nsymbol: "AAPL"\nrisk:\n  risk_dollars: 100\nactions:\n  - kind: enter_long\n    params:\n      initial_stop: session_low\n',
+    }
+
+    upserted = client.post("/strategies/upsert", json=payload)
+    assert upserted.status_code == 200
+    strategy_id = upserted.json()["strategy_id"]
+
+    fetched = client.get(f"/strategies/definition/{strategy_id}")
+    assert fetched.status_code == 200
+    body = fetched.json()
+    assert body["strategy_id"] == strategy_id
+    assert body["source_format"] == "yaml"
+
+
 def test_arm_live_requires_env_gates_and_switches_status_mode() -> None:
     client_blocked, _, _ = _build_client(live_trading=False, ack="")
     blocked = client_blocked.post("/arm_live")

@@ -261,11 +261,35 @@
             </div>
           </div>
         </div>
+        <div class="row">
+          <div class="field">
+            <label>Definition Format</label>
+            <select id="strategyFormatInput">
+              <option value="yaml" selected>yaml</option>
+              <option value="json">json</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Definition Actions</label>
+            <div class="btns" style="margin-top: 2px;">
+              <button id="saveStrategyBtn">Save Definition</button>
+              <button id="loadStrategyBtn" class="secondary">Load Definition</button>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Strategy YAML/JSON</label>
+          <textarea id="strategySourceInput" style="width:100%;height:210px;border:1px solid var(--border);border-radius:7px;padding:8px;font-family:Consolas,monospace;font-size:12px;"></textarea>
+        </div>
+        <div id="strategyLog" class="status"></div>
         <table>
           <thead>
             <tr>
               <th>Strategy</th>
               <th>Running</th>
+              <th>Symbol</th>
+              <th>Enabled</th>
+              <th>Error</th>
             </tr>
           </thead>
           <tbody id="strategyTableBody"></tbody>
@@ -427,12 +451,15 @@
         const data = await api("/strategies");
         for (const s of data.strategies) {
           const tr = document.createElement("tr");
-          tr.innerHTML = `<td>${s.strategy_id}</td><td>${s.running ? "yes" : "no"}</td>`;
+          tr.onclick = () => {
+            document.getElementById("strategyInput").value = s.strategy_id;
+          };
+          tr.innerHTML = `<td>${s.strategy_id}</td><td>${s.running ? "yes" : "no"}</td><td>${s.symbol || ""}</td><td>${s.enabled === null ? "" : (s.enabled ? "yes" : "no")}</td><td>${s.last_error || ""}</td>`;
           body.appendChild(tr);
         }
       } catch (err) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="2" class="err">${err.message}</td>`;
+        tr.innerHTML = `<td colspan="5" class="err">${err.message}</td>`;
         body.appendChild(tr);
       }
     }
@@ -442,6 +469,44 @@
       if (!strategyId) return;
       await api(path, "POST", { strategy_id: strategyId });
       await refreshStrategies();
+    }
+
+    async function saveStrategyDefinition() {
+      const source = document.getElementById("strategySourceInput").value;
+      const sourceFormat = document.getElementById("strategyFormatInput").value;
+      const panel = document.getElementById("strategyLog");
+      if (!source.trim()) {
+        log(panel, "Strategy source is required.", "err");
+        return;
+      }
+      try {
+        const result = await api("/strategies/upsert", "POST", {
+          source_format: sourceFormat,
+          source_payload: source
+        });
+        document.getElementById("strategyInput").value = result.strategy_id;
+        log(panel, `Saved strategy ${result.strategy_id}.`, "ok");
+        await refreshStrategies();
+      } catch (err) {
+        log(panel, `Save failed: ${err.message}`, "err");
+      }
+    }
+
+    async function loadStrategyDefinition() {
+      const strategyId = document.getElementById("strategyInput").value.trim();
+      const panel = document.getElementById("strategyLog");
+      if (!strategyId) {
+        log(panel, "Strategy ID is required to load.", "err");
+        return;
+      }
+      try {
+        const definition = await api(`/strategies/definition/${encodeURIComponent(strategyId)}`);
+        document.getElementById("strategyFormatInput").value = definition.source_format;
+        document.getElementById("strategySourceInput").value = definition.source_payload;
+        log(panel, `Loaded definition for ${strategyId}.`, "ok");
+      } catch (err) {
+        log(panel, `Load failed: ${err.message}`, "err");
+      }
     }
 
     async function armLive() {
@@ -464,6 +529,41 @@
     document.getElementById("startStrategyBtn").onclick = () => strategyAction("/strategies/start");
     document.getElementById("stopStrategyBtn").onclick = () => strategyAction("/strategies/stop");
     document.getElementById("refreshStrategyBtn").onclick = refreshStrategies;
+    document.getElementById("saveStrategyBtn").onclick = saveStrategyDefinition;
+    document.getElementById("loadStrategyBtn").onclick = loadStrategyDefinition;
+
+    document.getElementById("strategySourceInput").value = `version: "1.0"
+strategy_id: "orb-aapl"
+symbol: "AAPL"
+enabled: true
+timeframe: "1m"
+session:
+  timezone: "US/Eastern"
+  market_open: "09:30"
+  market_close: "16:00"
+  opening_range_minutes: 5
+constraints:
+  - kind: once_per_day
+  - kind: within_time
+    params:
+      start: "09:35"
+      end: "10:30"
+entry:
+  - kind: crosses_above
+    params:
+      level: opening_range_high
+risk:
+  risk_dollars: 100
+exit:
+  breakeven_trigger_r: 1.0
+actions:
+  - kind: enter_long
+    params:
+      initial_stop: session_low
+  - kind: move_stop_to_breakeven
+    params:
+      trigger_r: 1.0
+`;
 
     refreshStatus();
     refreshOpenTrades();

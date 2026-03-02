@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -26,12 +26,15 @@ from app.api.schemas import (
     StatusResponse,
     StrategiesResponse,
     StrategyCommandRequest,
+    StrategyDefinitionResponse,
     StrategyStatus,
+    StrategyUpsertRequest,
 )
 from app.config import Settings
 from app.domain.enums import EnvironmentMode
 from app.domain.errors import ExecBotError
 from app.domain.models import ContractRef, OrderIntent, PinnedContract
+from app.execution.strategy_runtime import StrategyDefinitionView, StrategyRuntimeStatus
 
 
 class ContractCandidateLike(Protocol):
@@ -84,13 +87,19 @@ class OrderManagerLike(Protocol):
 
 @dataclass
 class StrategyRegistry:
-    """In-memory strategy start/stop state for control plane."""
+    """Fallback in-memory strategy registry used when runtime orchestration is not provided."""
 
     running: dict[str, bool] = field(default_factory=dict)
+    definitions: dict[str, StrategyDefinitionResponse] = field(default_factory=dict)
 
     def list(self) -> list[StrategyStatus]:
         return [
-            StrategyStatus(strategy_id=strategy_id, running=is_running)
+            StrategyStatus(
+                strategy_id=strategy_id,
+                running=is_running,
+                symbol=(self.definitions[strategy_id].symbol if strategy_id in self.definitions else None),
+                enabled=(self.definitions[strategy_id].enabled if strategy_id in self.definitions else None),
+            )
             for strategy_id, is_running in sorted(self.running.items())
         ]
 
@@ -105,6 +114,56 @@ class StrategyRegistry:
     def stop_all(self) -> None:
         for key in list(self.running.keys()):
             self.running[key] = False
+
+    def upsert_definition(
+        self,
+        *,
+        source_payload: str,
+        source_format: Literal["yaml", "json"],
+    ) -> StrategyStatus:
+        strategy_id = f"draft-{len(self.definitions) + 1}"
+        self.definitions[strategy_id] = StrategyDefinitionResponse(
+            strategy_id=strategy_id,
+            source_format=source_format,
+            source_payload=source_payload,
+            symbol="UNKNOWN",
+            enabled=True,
+        )
+        self.running.setdefault(strategy_id, False)
+        return StrategyStatus(strategy_id=strategy_id, running=self.running[strategy_id])
+
+    def get_definition(self, strategy_id: str) -> StrategyDefinitionResponse:
+        item = self.definitions.get(strategy_id)
+        if item is None:
+            raise ValueError("strategy definition not found")
+        return item
+
+
+class StrategyRegistryLike(Protocol):
+    """Protocol for strategy registry/runtime operations."""
+
+    def list(self) -> list[StrategyStatus | StrategyRuntimeStatus]:
+        """List strategy statuses."""
+
+    def start(self, strategy_id: str) -> StrategyStatus | StrategyRuntimeStatus:
+        """Start a strategy."""
+
+    def stop(self, strategy_id: str) -> StrategyStatus | StrategyRuntimeStatus:
+        """Stop a strategy."""
+
+    def stop_all(self) -> None:
+        """Stop all strategies."""
+
+    def upsert_definition(
+        self,
+        *,
+        source_payload: str,
+        source_format: Literal["yaml", "json"],
+    ) -> StrategyStatus | StrategyRuntimeStatus:
+        """Create or update strategy definition."""
+
+    def get_definition(self, strategy_id: str) -> StrategyDefinitionView | StrategyDefinitionResponse:
+        """Get strategy definition source."""
 
 
 @dataclass
@@ -164,15 +223,15 @@ def get_order_manager(request: Request) -> OrderManagerLike:
     return cast(OrderManagerLike, manager_obj)
 
 
-def get_strategy_registry(request: Request) -> StrategyRegistry:
+def get_strategy_registry(request: Request) -> StrategyRegistryLike:
     """Resolve strategy registry dependency from app state."""
     registry_obj = getattr(request.app.state, "strategy_registry", None)
-    if not isinstance(registry_obj, StrategyRegistry):
+    if registry_obj is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="strategy registry unavailable",
         )
-    return registry_obj
+    return cast(StrategyRegistryLike, registry_obj)
 
 
 def build_router() -> APIRouter:
@@ -308,35 +367,105 @@ def build_router() -> APIRouter:
         return OpenOrdersResponse(trade_ids=trade_ids)
 
     @router.get("/strategies", response_model=StrategiesResponse)
-    def list_strategies(registry: StrategyRegistry = Depends(get_strategy_registry)) -> StrategiesResponse:
-        return StrategiesResponse(strategies=registry.list())
+    def list_strategies(registry: StrategyRegistryLike = Depends(get_strategy_registry)) -> StrategiesResponse:
+        raw_items = registry.list()
+        return StrategiesResponse(
+            strategies=[
+                StrategyStatus(
+                    strategy_id=item.strategy_id,
+                    running=item.running,
+                    symbol=getattr(item, "symbol", None),
+                    enabled=getattr(item, "enabled", None),
+                    last_error=getattr(item, "last_error", None),
+                )
+                for item in raw_items
+            ]
+        )
+
+    @router.post("/strategies/upsert", response_model=StrategyStatus)
+    def upsert_strategy_definition(
+        payload: StrategyUpsertRequest,
+        registry: StrategyRegistryLike = Depends(get_strategy_registry),
+    ) -> StrategyStatus:
+        try:
+            result = registry.upsert_definition(
+                source_payload=payload.source_payload,
+                source_format=payload.source_format,
+            )
+        except ExecBotError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return StrategyStatus(
+            strategy_id=result.strategy_id,
+            running=result.running,
+            symbol=getattr(result, "symbol", None),
+            enabled=getattr(result, "enabled", None),
+            last_error=getattr(result, "last_error", None),
+        )
+
+    @router.get("/strategies/definition/{strategy_id}", response_model=StrategyDefinitionResponse)
+    def get_strategy_definition(
+        strategy_id: str,
+        registry: StrategyRegistryLike = Depends(get_strategy_registry),
+    ) -> StrategyDefinitionResponse:
+        try:
+            definition = registry.get_definition(strategy_id)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return StrategyDefinitionResponse(
+            strategy_id=definition.strategy_id,
+            source_format=definition.source_format,
+            source_payload=definition.source_payload,
+            symbol=definition.symbol,
+            enabled=definition.enabled,
+        )
 
     @router.post("/strategies/start", response_model=StrategyStatus)
     def start_strategy(
         payload: StrategyCommandRequest,
         runtime: ControlPlaneRuntime = Depends(get_runtime),
-        registry: StrategyRegistry = Depends(get_strategy_registry),
+        registry: StrategyRegistryLike = Depends(get_strategy_registry),
     ) -> StrategyStatus:
         if runtime.kill_switch:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="kill switch active")
-        return registry.start(payload.strategy_id)
+        try:
+            result = registry.start(payload.strategy_id)
+        except ExecBotError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return StrategyStatus(
+            strategy_id=result.strategy_id,
+            running=result.running,
+            symbol=getattr(result, "symbol", None),
+            enabled=getattr(result, "enabled", None),
+            last_error=getattr(result, "last_error", None),
+        )
 
     @router.post("/strategies/stop", response_model=StrategyStatus)
     def stop_strategy(
         payload: StrategyCommandRequest,
-        registry: StrategyRegistry = Depends(get_strategy_registry),
+        registry: StrategyRegistryLike = Depends(get_strategy_registry),
     ) -> StrategyStatus:
-        return registry.stop(payload.strategy_id)
+        try:
+            result = registry.stop(payload.strategy_id)
+        except ExecBotError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return StrategyStatus(
+            strategy_id=result.strategy_id,
+            running=result.running,
+            symbol=getattr(result, "symbol", None),
+            enabled=getattr(result, "enabled", None),
+            last_error=getattr(result, "last_error", None),
+        )
 
     @router.post("/kill", response_model=KillResponse)
     def kill(
         runtime: ControlPlaneRuntime = Depends(get_runtime),
-        registry: StrategyRegistry = Depends(get_strategy_registry),
+        registry: StrategyRegistryLike = Depends(get_strategy_registry),
         order_manager: OrderManagerLike = Depends(get_order_manager),
     ) -> KillResponse:
         runtime.kill_switch = True
         runtime.live_armed = False
         _set_order_manager_environment(order_manager, EnvironmentMode.PAPER)
+        _set_strategy_environment(registry, EnvironmentMode.PAPER)
         registry.stop_all()
         return KillResponse(kill_switch=runtime.kill_switch, live_armed=runtime.live_armed)
 
@@ -345,6 +474,7 @@ def build_router() -> APIRouter:
         settings: Settings = Depends(get_settings),
         runtime: ControlPlaneRuntime = Depends(get_runtime),
         order_manager: OrderManagerLike = Depends(get_order_manager),
+        registry: StrategyRegistryLike = Depends(get_strategy_registry),
     ) -> ArmLiveResponse:
         if runtime.kill_switch:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="kill switch active")
@@ -357,6 +487,7 @@ def build_router() -> APIRouter:
 
         runtime.live_armed = True
         _set_order_manager_environment(order_manager, EnvironmentMode.LIVE)
+        _set_strategy_environment(registry, EnvironmentMode.LIVE)
         return ArmLiveResponse(armed=True, mode=_current_mode(settings=settings, runtime=runtime))
 
     return router
@@ -383,5 +514,11 @@ def _to_pinned_response(item: PinnedContract) -> PinnedContractResponse:
 
 def _set_order_manager_environment(order_manager: OrderManagerLike, environment: EnvironmentMode) -> None:
     setter = getattr(order_manager, "set_environment", None)
+    if callable(setter):
+        setter(environment)
+
+
+def _set_strategy_environment(registry: StrategyRegistryLike, environment: EnvironmentMode) -> None:
+    setter = getattr(registry, "set_environment", None)
     if callable(setter):
         setter(environment)

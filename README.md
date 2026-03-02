@@ -20,6 +20,15 @@ Phases 0-11 implemented in this repository with deterministic replay coverage an
 6. API docs remain available at:
    `http://127.0.0.1:8000/docs`
 
+## Strategy UI Workflow
+
+1. Open `http://127.0.0.1:8000/`.
+2. In **Strategies**, edit YAML/JSON in the strategy source panel.
+3. Click **Save Definition** (calls `/strategies/upsert`).
+4. Pin the strategy symbol in the same environment (paper/live).
+5. Click **Start** to run the strategy loop (5s bars -> 1m bars -> DSL engine -> OrderManager).
+6. Monitor status/errors in the strategy table and open trades in the open-trades panel.
+
 ## Paper Trading UI Test Flow
 
 1. Start IB Gateway or TWS with API enabled (`127.0.0.1`, paper port `7497` by default).

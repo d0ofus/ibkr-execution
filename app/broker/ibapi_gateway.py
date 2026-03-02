@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 import logging
 import threading
 from typing import Any
+from collections.abc import Callable
 
 from ibapi.client import EClient
 from ibapi.common import BarData
@@ -18,7 +20,7 @@ from ibapi.wrapper import EWrapper
 
 from app.broker.contracts import ContractCandidate
 from app.domain.errors import BrokerConnectivityError
-from app.domain.models import BrokerOrderSpec, ContractRef
+from app.domain.models import BrokerOrderSpec, ContractRef, MarketBar
 
 
 @dataclass
@@ -72,6 +74,9 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._pending_order_acks: dict[int, _PendingOrderAck] = {}
         self._pending_order_acks_lock = threading.Lock()
         self._bar_subscription_ids: dict[int, int] = {}
+        self._bar_subscription_symbols: dict[int, str] = {}
+        self._bar_handlers: list[Callable[[MarketBar], None]] = []
+        self._order_status_handlers: list[Callable[[int, str, int, int], None]] = []
 
     def connect(self) -> None:
         """Connect to IB API socket and wait for next valid order ID callback."""
@@ -183,7 +188,16 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         request_id = self._reserve_request_id()
         ib_contract = self._to_ib_contract(contract)
         self._bar_subscription_ids[contract.con_id] = request_id
+        self._bar_subscription_symbols[request_id] = contract.symbol.upper()
         super().reqRealTimeBars(request_id, ib_contract, 5, "TRADES", True, [])
+
+    def register_realtime_bar_handler(self, handler: Callable[[MarketBar], None]) -> None:
+        """Register callback for incoming IB real-time bars."""
+        self._bar_handlers.append(handler)
+
+    def register_order_status_handler(self, handler: Callable[[int, str, int, int], None]) -> None:
+        """Register callback for normalized order status updates."""
+        self._order_status_handlers.append(handler)
 
     def qualify(self, symbol: str) -> list[ContractCandidate]:
         """Synchronously qualify a US equity symbol against IB contract details."""
@@ -293,6 +307,19 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             close,
             volume,
         )
+        symbol = self._bar_subscription_symbols.get(reqId)
+        if symbol is not None:
+            market_bar = MarketBar(
+                symbol=symbol,
+                timestamp=datetime.fromtimestamp(time, tz=UTC),
+                open=Decimal(str(open_)),
+                high=Decimal(str(high)),
+                low=Decimal(str(low)),
+                close=Decimal(str(close)),
+                volume=int(volume),
+            )
+            for handler in self._bar_handlers:
+                handler(market_bar)
         _ = (wap, count)
 
     def historicalData(self, reqId: int, bar: BarData) -> None:  # noqa: N802
@@ -339,6 +366,8 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
                 order_id=orderId,
                 message=f"order status {status}",
             )
+        for handler in self._order_status_handlers:
+            handler(orderId, status, int(filled), int(remaining))
         _ = (
             filled,
             remaining,

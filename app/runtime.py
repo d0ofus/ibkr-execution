@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 import logging
+from pathlib import Path
 from typing import Any
 
 from app.api.http_server import ApiDependencies
@@ -16,6 +17,7 @@ from app.broker.reconnect import ReconnectPolicy, ReconnectSupervisor
 from app.config import Settings
 from app.domain.enums import EnvironmentMode
 from app.execution.order_manager import OrderManager
+from app.execution.strategy_runtime import StrategyExecutionRuntime
 from app.persistence.db import create_all_tables, create_engine_and_session
 from app.persistence.repositories import (
     SqlAlchemyAuditLogRepository,
@@ -74,6 +76,29 @@ def build_api_dependencies(settings: Settings, *, runtime: ControlPlaneRuntime) 
         min_stop_distance=Decimal(str(settings.min_stop_distance)),
         environment=EnvironmentMode.PAPER,
     )
+    strategy_runtime = StrategyExecutionRuntime(
+        order_manager=order_manager,
+        broker_client=broker_client,
+        contract_service=contract_service,
+        environment=EnvironmentMode.PAPER,
+    )
+    transport.register_realtime_bar_handler(strategy_runtime.on_realtime_bar)
+    transport.register_order_status_handler(
+        lambda order_id, _status, filled, _remaining: strategy_runtime.on_order_status_update(
+            order_id=order_id,
+            filled_quantity=filled,
+        )
+    )
+
+    default_strategy_path = Path("app/replay/datasets/orb_strategy.yaml")
+    if default_strategy_path.exists():
+        try:
+            strategy_runtime.upsert_definition(
+                source_payload=default_strategy_path.read_text(encoding="utf-8"),
+                source_format="yaml",
+            )
+        except Exception:
+            logger.exception("failed_to_load_default_strategy")
 
     def startup_connect_broker() -> None:
         if settings.dry_run:
@@ -103,6 +128,8 @@ def build_api_dependencies(settings: Settings, *, runtime: ControlPlaneRuntime) 
         "trade_repository": trade_repo,
         "pinned_contract_repository": pinned_repo,
         "audit_log_repository": audit_repo,
+        "strategy_registry": strategy_runtime,
+        "strategy_runtime": strategy_runtime,
     }
 
     return ApiDependencies(

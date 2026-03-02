@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -108,6 +109,9 @@ class StrategyStatus(BaseModel):
 
     strategy_id: str
     running: bool
+    symbol: str | None = None
+    enabled: bool | None = None
+    last_error: str | None = None
 
 
 class StrategiesResponse(BaseModel):
@@ -120,6 +124,23 @@ class StrategyCommandRequest(BaseModel):
     """Request payload for starting/stopping a strategy."""
 
     strategy_id: str
+
+
+class StrategyUpsertRequest(BaseModel):
+    """Request payload for creating/updating strategy source definitions."""
+
+    source_format: Literal["yaml", "json"]
+    source_payload: str
+
+
+class StrategyDefinitionResponse(BaseModel):
+    """Strategy source definition read model for UI/editor usage."""
+
+    strategy_id: str
+    source_format: Literal["yaml", "json"]
+    source_payload: str
+    symbol: str
+    enabled: bool
 
 
 class KillResponse(BaseModel):

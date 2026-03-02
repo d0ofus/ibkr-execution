@@ -97,6 +97,7 @@ class OrderManager:
         self._prefer_adjustable_breakeven = prefer_adjustable_breakeven
 
         self._intent_to_trade_id: dict[str, str] = {}
+        self._entry_order_id_to_trade_id: dict[int, str] = {}
         self._trade_contexts: dict[str, TradeRuntimeContext] = {}
         self._orders_sent_at: deque[datetime] = deque()
         self._trades_per_symbol_day: defaultdict[tuple[str, date], int] = defaultdict(int)
@@ -184,6 +185,7 @@ class OrderManager:
         )
         self._trade_contexts[trade_id] = context
         self._intent_to_trade_id[intent.intent_id] = trade_id
+        self._entry_order_id_to_trade_id[context.entry_local_order_id] = trade_id
 
         self._record_transmitted_orders(order_count=len(orders))
         self._record_trade_for_symbol(intent.symbol)
@@ -225,6 +227,18 @@ class OrderManager:
         self._broker_client.place_orders(context.contract, [modify_stop])
         self._record_transmitted_orders(order_count=1)
 
+    def on_broker_order_status(
+        self,
+        *,
+        broker_order_id: int,
+        filled_quantity: int,
+    ) -> None:
+        """Apply a broker fill update keyed by broker order identifier."""
+        trade_id = self._entry_order_id_to_trade_id.get(broker_order_id)
+        if trade_id is None:
+            return
+        self.on_fill_update(trade_id, filled_quantity=filled_quantity)
+
     def on_market_price(self, trade_id: str, last_price: Decimal) -> bool:
         """Apply one-time breakeven adjustment when configured trigger is reached."""
         context = self._require_context(trade_id)
@@ -237,19 +251,16 @@ class OrderManager:
         if not self._breakeven_trigger_hit(context.intent.side, last_price, trigger_price):
             return False
 
-        stop_side = self._protective_stop_side(context.intent.side)
-        adjustment = build_breakeven_adjustment_order(
-            side=stop_side,
-            quantity=context.filled_quantity,
-            stop_price=context.intent.entry_price,
-            existing_stop_order_id=context.stop_local_order_id,
-            trigger_price=trigger_price,
-            prefer_adjustable=self._prefer_adjustable_breakeven,
-        )
-        self._broker_client.place_orders(context.contract, [adjustment])
-        self._record_transmitted_orders(order_count=1)
-        context.breakeven_applied = True
-        return True
+        return self._apply_breakeven_adjustment(context)
+
+    def apply_breakeven_adjustment(self, trade_id: str) -> bool:
+        """Apply one-time breakeven adjustment without an internal trigger check."""
+        context = self._require_context(trade_id)
+        if context.breakeven_applied:
+            return False
+        if context.filled_quantity <= 0:
+            return False
+        return self._apply_breakeven_adjustment(context)
 
     def cancel_trade(self, trade_id: str) -> None:
         """Cancel all open orders for an existing trade."""
@@ -339,3 +350,18 @@ class OrderManager:
         if entry_side == Side.BUY:
             return last_price >= trigger_price
         return last_price <= trigger_price
+
+    def _apply_breakeven_adjustment(self, context: TradeRuntimeContext) -> bool:
+        stop_side = self._protective_stop_side(context.intent.side)
+        adjustment = build_breakeven_adjustment_order(
+            side=stop_side,
+            quantity=context.filled_quantity,
+            stop_price=context.intent.entry_price,
+            existing_stop_order_id=context.stop_local_order_id,
+            trigger_price=self._breakeven_trigger_price(context.intent),
+            prefer_adjustable=self._prefer_adjustable_breakeven,
+        )
+        self._broker_client.place_orders(context.contract, [adjustment])
+        self._record_transmitted_orders(order_count=1)
+        context.breakeven_applied = True
+        return True

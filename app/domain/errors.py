@@ -47,3 +47,11 @@ class DuplicateRecordError(PersistenceError):
 
 class RecordNotFoundError(PersistenceError):
     """Raised when a requested record does not exist."""
+
+
+class StrategyError(ExecBotError):
+    """Raised for strategy runtime and orchestration errors."""
+
+
+class StrategyNotFoundError(StrategyError):
+    """Raised when a strategy definition cannot be found."""
