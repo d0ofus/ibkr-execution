@@ -30,6 +30,16 @@ class _PendingContractQualification:
     error_message: str | None = None
 
 
+@dataclass
+class _PendingOrderAck:
+    """Pending synchronous order-acknowledgement request."""
+
+    completed: threading.Event = field(default_factory=threading.Event)
+    acknowledged: bool = False
+    rejected: bool = False
+    error_message: str | None = None
+
+
 class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
     """Thread-safe IB API gateway implementing broker transport operations."""
 
@@ -59,6 +69,8 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._request_id_lock = threading.Lock()
         self._next_request_id = 1
         self._pending_contract_requests: dict[int, _PendingContractQualification] = {}
+        self._pending_order_acks: dict[int, _PendingOrderAck] = {}
+        self._pending_order_acks_lock = threading.Lock()
         self._bar_subscription_ids: dict[int, int] = {}
 
     def connect(self) -> None:
@@ -108,6 +120,10 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
                 local_to_broker_id=local_to_broker_id,
                 used_order_ids=used_order_ids,
             )
+            pending_ack = _PendingOrderAck()
+            with self._pending_order_acks_lock:
+                self._pending_order_acks[order_id] = pending_ack
+
             ib_order = self._to_ib_order(
                 spec=spec,
                 order_id=order_id,
@@ -115,6 +131,23 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             )
 
             super().placeOrder(order_id, ib_contract, ib_order)
+
+            if not pending_ack.completed.wait(timeout=self._request_timeout_seconds):
+                with self._pending_order_acks_lock:
+                    self._pending_order_acks.pop(order_id, None)
+                raise BrokerConnectivityError(
+                    f"Timed out waiting for broker acknowledgement for order_id={order_id}."
+                )
+            if pending_ack.rejected:
+                with self._pending_order_acks_lock:
+                    self._pending_order_acks.pop(order_id, None)
+                reason = pending_ack.error_message or "unknown broker rejection"
+                raise BrokerConnectivityError(
+                    f"Broker rejected order_id={order_id}: {reason}"
+                )
+            with self._pending_order_acks_lock:
+                self._pending_order_acks.pop(order_id, None)
+
             assigned_ids.append(str(order_id))
             used_order_ids.add(order_id)
 
@@ -222,6 +255,12 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             pending.error_message = f"IB error {errorCode}: {errorString}"
             if errorCode in {200, 201, 321}:
                 pending.completed.set()
+        with self._pending_order_acks_lock:
+            pending_order_ack = self._pending_order_acks.get(reqId)
+        if pending_order_ack is not None:
+            pending_order_ack.rejected = True
+            pending_order_ack.error_message = f"IB error {errorCode}: {errorString}"
+            pending_order_ack.completed.set()
 
         self._logger.warning(
             "ib_error req_id=%s code=%s message=%s",
@@ -260,6 +299,58 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         """IB callback placeholder for historical bars."""
         self._logger.debug("historical_data req_id=%s bar_date=%s", reqId, bar.date)
 
+    def openOrder(  # noqa: N802
+        self,
+        orderId: int,
+        contract: Contract,
+        order: Order,
+        orderState: Any,
+    ) -> None:
+        """IB callback indicating broker accepted the order envelope."""
+        self._mark_order_acknowledged(order_id=orderId)
+        _ = (contract, order, orderState)
+
+    def orderStatus(  # noqa: N802
+        self,
+        orderId: int,
+        status: str,
+        filled: float,
+        remaining: float,
+        avgFillPrice: float,
+        permId: int,
+        parentId: int,
+        lastFillPrice: float,
+        clientId: int,
+        whyHeld: str,
+        mktCapPrice: float,
+    ) -> None:
+        """IB callback for order status transitions."""
+        normalized = status.strip().lower()
+        if normalized in {
+            "submitted",
+            "presubmitted",
+            "apipending",
+            "pendingcancel",
+            "filled",
+        }:
+            self._mark_order_acknowledged(order_id=orderId)
+        elif normalized in {"cancelled", "apicancelled", "inactive"}:
+            self._mark_order_rejected(
+                order_id=orderId,
+                message=f"order status {status}",
+            )
+        _ = (
+            filled,
+            remaining,
+            avgFillPrice,
+            permId,
+            parentId,
+            lastFillPrice,
+            clientId,
+            whyHeld,
+            mktCapPrice,
+        )
+
     def _start_reader_thread(self) -> None:
         if self._reader_thread is not None and self._reader_thread.is_alive():
             return
@@ -282,23 +373,7 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         if spec.modification_of_order_id is not None:
             return local_to_broker_id.get(spec.modification_of_order_id, spec.modification_of_order_id)
 
-        if spec.order_id is None:
-            return self._reserve_next_order_id(used_order_ids=used_order_ids)
-
-        desired = local_to_broker_id.get(spec.order_id, spec.order_id)
-        if desired in used_order_ids or not self._is_order_id_available(desired):
-            resolved = self._reserve_next_order_id(used_order_ids=used_order_ids)
-            local_to_broker_id[spec.order_id] = resolved
-            return resolved
-
-        self._ensure_next_order_id_at_least(desired + 1)
-        return desired
-
-    def _is_order_id_available(self, order_id: int) -> bool:
-        with self._order_id_lock:
-            if self._next_valid_order_id is None:
-                raise BrokerConnectivityError("No nextValidId available from IB connection.")
-            return order_id >= self._next_valid_order_id
+        return self._reserve_next_order_id(used_order_ids=used_order_ids)
 
     def _reserve_next_order_id(self, *, used_order_ids: set[int]) -> int:
         with self._order_id_lock:
@@ -310,12 +385,22 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             self._next_valid_order_id += 1
             return reserved
 
-    def _ensure_next_order_id_at_least(self, minimum: int) -> None:
-        with self._order_id_lock:
-            if self._next_valid_order_id is None:
-                raise BrokerConnectivityError("No nextValidId available from IB connection.")
-            if self._next_valid_order_id < minimum:
-                self._next_valid_order_id = minimum
+    def _mark_order_acknowledged(self, *, order_id: int) -> None:
+        with self._pending_order_acks_lock:
+            pending = self._pending_order_acks.get(order_id)
+        if pending is None:
+            return
+        pending.acknowledged = True
+        pending.completed.set()
+
+    def _mark_order_rejected(self, *, order_id: int, message: str) -> None:
+        with self._pending_order_acks_lock:
+            pending = self._pending_order_acks.get(order_id)
+        if pending is None:
+            return
+        pending.rejected = True
+        pending.error_message = message
+        pending.completed.set()
 
     @staticmethod
     def _to_ib_contract(contract: ContractRef) -> Contract:
@@ -354,6 +439,12 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         if spec.algo_strategy is not None:
             order.algoStrategy = spec.algo_strategy
             order.algoParams = [TagValue(tag=key, value=value) for key, value in spec.algo_params.items()]
+
+        # Newer IB server builds can reject these deprecated attributes unless explicitly disabled.
+        if hasattr(order, "eTradeOnly"):
+            order.eTradeOnly = False
+        if hasattr(order, "firmQuoteOnly"):
+            order.firmQuoteOnly = False
 
         if spec.is_adjustable and spec.trigger_price is not None and spec.adjusted_stop_price is not None:
             order.triggerPrice = float(spec.trigger_price)
