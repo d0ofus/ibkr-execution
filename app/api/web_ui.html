@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IBKR Exec Control Panel</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #152238;
+      --muted: #5e6b7b;
+      --accent: #0f6cbf;
+      --ok: #107a3d;
+      --warn: #9a5200;
+      --err: #b42318;
+      --border: #d7dee6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #eef3f7 0%, #f8fafc 100%);
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0.2px;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin: 0 0 18px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 1px 2px rgba(20, 31, 44, 0.05);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .row3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    input, select {
+      height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 8px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--text);
+    }
+    button {
+      border: none;
+      border-radius: 7px;
+      padding: 9px 12px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #4c6078;
+    }
+    button.warn {
+      background: #9a5200;
+    }
+    button.danger {
+      background: var(--err);
+    }
+    .btns {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .status {
+      font-size: 13px;
+      margin-top: 8px;
+      white-space: pre-wrap;
+      color: var(--muted);
+      max-height: 160px;
+      overflow: auto;
+      border-top: 1px dashed var(--border);
+      padding-top: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #e9f2fc;
+      color: #134978;
+    }
+    .ok { color: var(--ok); }
+    .warn-text { color: var(--warn); }
+    .err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>IBKR Exec Control Panel</h1>
+    <p class="subtitle">Fast execution UI on top of the trading API. Use this instead of manual endpoint-by-endpoint calls.</p>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Runtime</h2>
+        <div class="btns">
+          <button id="refreshStatusBtn" class="secondary">Refresh Status</button>
+          <button id="armLiveBtn" class="warn">Arm Live</button>
+          <button id="killBtn" class="danger">Kill Switch</button>
+        </div>
+        <div id="runtimeSummary" class="status">Loading...</div>
+      </section>
+
+      <section class="card">
+        <h2>Quick Submit Order</h2>
+        <div class="row3">
+          <div class="field">
+            <label>Symbol</label>
+            <input id="symbolInput" value="AAPL">
+          </div>
+          <div class="field">
+            <label>Side</label>
+            <select id="sideInput">
+              <option>BUY</option>
+              <option>SELL</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Environment</label>
+            <select id="envInput">
+              <option value="paper" selected>paper</option>
+              <option value="live">live</option>
+            </select>
+          </div>
+        </div>
+        <div class="row3">
+          <div class="field">
+            <label>Entry Price</label>
+            <input id="entryInput" value="200.00">
+          </div>
+          <div class="field">
+            <label>Stop Price</label>
+            <input id="stopInput" value="199.00">
+          </div>
+          <div class="field">
+            <label>Risk Dollars</label>
+            <input id="riskInput" value="100.00">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Optional conId (recommended if multiple candidates)</label>
+            <input id="conIdInput" placeholder="e.g. 265598">
+          </div>
+          <div class="field">
+            <label>Optional strategy_id</label>
+            <input id="strategyIdInput" placeholder="orb-aapl">
+          </div>
+        </div>
+        <div class="btns">
+          <button id="quickSubmitBtn">Quick Submit (Auto Resolve/Pin/Send)</button>
+          <button id="resolveBtn" class="secondary">Resolve Candidates</button>
+        </div>
+        <div id="quickSubmitLog" class="status"></div>
+      </section>
+    </div>
+
+    <div class="grid" style="margin-top: 14px;">
+      <section class="card">
+        <h2>Contract Candidates</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>conId</th>
+              <th>Exchange</th>
+              <th>Primary</th>
+            </tr>
+          </thead>
+          <tbody id="candidateTableBody"></tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Open Trades</h2>
+        <div class="btns">
+          <button id="refreshOpenBtn" class="secondary">Refresh Open Trades</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Trade ID</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="openTradesBody"></tbody>
+        </table>
+      </section>
+    </div>
+
+    <div class="grid" style="margin-top: 14px;">
+      <section class="card">
+        <h2>Strategies</h2>
+        <div class="row">
+          <div class="field">
+            <label>Strategy ID</label>
+            <input id="strategyInput" value="orb-aapl">
+          </div>
+          <div class="field">
+            <label>Action</label>
+            <div class="btns" style="margin-top: 2px;">
+              <button id="startStrategyBtn">Start</button>
+              <button id="stopStrategyBtn" class="secondary">Stop</button>
+              <button id="refreshStrategyBtn" class="secondary">Refresh</button>
+            </div>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Running</th>
+            </tr>
+          </thead>
+          <tbody id="strategyTableBody"></tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    async function api(path, method = "GET", body = null) {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (body !== null) opts.body = JSON.stringify(body);
+      const res = await fetch(path, opts);
+      const text = await res.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+      if (!res.ok) throw new Error(`${res.status}: ${JSON.stringify(data)}`);
+      return data;
+    }
+
+    function log(el, message, cls = "") {
+      el.className = `status ${cls}`;
+      el.textContent = message;
+    }
+
+    async function refreshStatus() {
+      const panel = document.getElementById("runtimeSummary");
+      try {
+        const status = await api("/status");
+        document.getElementById("envInput").value = status.mode;
+        panel.innerHTML = [
+          `<div><span class="pill">mode: ${status.mode}</span></div>`,
+          `<div>live_enabled: ${status.live_enabled}</div>`,
+          `<div>live_armed: ${status.live_armed}</div>`,
+          `<div>dry_run: ${status.dry_run}</div>`,
+          `<div>kill_switch: ${status.kill_switch}</div>`,
+          `<div>account: ${status.account || "(not set)"}</div>`
+        ].join("");
+      } catch (err) {
+        panel.innerHTML = `<span class="err">${err.message}</span>`;
+      }
+    }
+
+    async function resolveCandidates() {
+      const symbol = document.getElementById("symbolInput").value.trim().toUpperCase();
+      const logPanel = document.getElementById("quickSubmitLog");
+      if (!symbol) {
+        log(logPanel, "Symbol is required.", "err");
+        return [];
+      }
+      try {
+        const data = await api("/contracts/resolve", "POST", { symbol });
+        const body = document.getElementById("candidateTableBody");
+        body.innerHTML = "";
+        for (const row of data.candidates) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${row.symbol}</td><td>${row.con_id}</td><td>${row.exchange}</td><td>${row.primary_exchange || ""}</td>`;
+          tr.onclick = () => { document.getElementById("conIdInput").value = String(row.con_id); };
+          body.appendChild(tr);
+        }
+        log(logPanel, `Resolved ${data.candidates.length} candidate(s). Click a row to use its conId.`, "ok");
+        return data.candidates;
+      } catch (err) {
+        log(logPanel, `Resolve failed: ${err.message}`, "err");
+        return [];
+      }
+    }
+
+    async function ensurePinned(symbol, environment, conIdMaybe) {
+      const pinned = await api(`/contracts/pinned?environment=${environment}`);
+      const existing = pinned.find((x) => x.symbol === symbol && x.environment === environment && x.is_active);
+      if (existing) return existing;
+
+      let conId = conIdMaybe;
+      if (!conId) {
+        const candidates = await api("/contracts/resolve", "POST", { symbol });
+        if (!candidates.candidates || candidates.candidates.length === 0) {
+          throw new Error("No contract candidates found.");
+        }
+        if (candidates.candidates.length > 1) {
+          throw new Error("Multiple candidates found. Resolve and choose conId first.");
+        }
+        conId = candidates.candidates[0].con_id;
+      }
+      return await api("/contracts/pin", "POST", { symbol, con_id: Number(conId), environment });
+    }
+
+    async function quickSubmit() {
+      const symbol = document.getElementById("symbolInput").value.trim().toUpperCase();
+      const side = document.getElementById("sideInput").value;
+      const environment = document.getElementById("envInput").value;
+      const entry = document.getElementById("entryInput").value.trim();
+      const stop = document.getElementById("stopInput").value.trim();
+      const risk = document.getElementById("riskInput").value.trim();
+      const conIdRaw = document.getElementById("conIdInput").value.trim();
+      const strategyId = document.getElementById("strategyIdInput").value.trim();
+      const logPanel = document.getElementById("quickSubmitLog");
+
+      if (!symbol || !entry || !stop || !risk) {
+        log(logPanel, "Symbol, entry, stop, and risk are required.", "err");
+        return;
+      }
+
+      try {
+        await ensurePinned(symbol, environment, conIdRaw || null);
+        const payload = {
+          symbol,
+          side,
+          entry_price: entry,
+          stop_price: stop,
+          risk_dollars: risk,
+          strategy_id: strategyId || null
+        };
+        const result = await api("/orders/intent", "POST", payload);
+        if (result.accepted) {
+          log(logPanel, `Accepted. trade_id=${result.trade_id}`, "ok");
+        } else {
+          log(logPanel, `Rejected: ${result.reason || "unknown"}`, "warn-text");
+        }
+        await refreshOpenTrades();
+      } catch (err) {
+        log(logPanel, `Quick submit failed: ${err.message}`, "err");
+      }
+    }
+
+    async function refreshOpenTrades() {
+      const body = document.getElementById("openTradesBody");
+      body.innerHTML = "";
+      try {
+        const data = await api("/orders/open");
+        for (const tradeId of data.trade_ids) {
+          const tr = document.createElement("tr");
+          const tdId = document.createElement("td");
+          tdId.textContent = tradeId;
+          const tdAction = document.createElement("td");
+          const btn = document.createElement("button");
+          btn.textContent = "Cancel";
+          btn.className = "danger";
+          btn.onclick = async () => {
+            await api(`/orders/cancel/${tradeId}`, "POST");
+            await refreshOpenTrades();
+          };
+          tdAction.appendChild(btn);
+          tr.appendChild(tdId);
+          tr.appendChild(tdAction);
+          body.appendChild(tr);
+        }
+      } catch (err) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="2" class="err">${err.message}</td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    async function refreshStrategies() {
+      const body = document.getElementById("strategyTableBody");
+      body.innerHTML = "";
+      try {
+        const data = await api("/strategies");
+        for (const s of data.strategies) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${s.strategy_id}</td><td>${s.running ? "yes" : "no"}</td>`;
+          body.appendChild(tr);
+        }
+      } catch (err) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="2" class="err">${err.message}</td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    async function strategyAction(path) {
+      const strategyId = document.getElementById("strategyInput").value.trim();
+      if (!strategyId) return;
+      await api(path, "POST", { strategy_id: strategyId });
+      await refreshStrategies();
+    }
+
+    async function armLive() {
+      await api("/arm_live", "POST");
+      await refreshStatus();
+    }
+
+    async function killSwitch() {
+      await api("/kill", "POST");
+      await refreshStatus();
+      await refreshStrategies();
+    }
+
+    document.getElementById("refreshStatusBtn").onclick = refreshStatus;
+    document.getElementById("armLiveBtn").onclick = armLive;
+    document.getElementById("killBtn").onclick = killSwitch;
+    document.getElementById("quickSubmitBtn").onclick = quickSubmit;
+    document.getElementById("resolveBtn").onclick = resolveCandidates;
+    document.getElementById("refreshOpenBtn").onclick = refreshOpenTrades;
+    document.getElementById("startStrategyBtn").onclick = () => strategyAction("/strategies/start");
+    document.getElementById("stopStrategyBtn").onclick = () => strategyAction("/strategies/stop");
+    document.getElementById("refreshStrategyBtn").onclick = refreshStrategies;
+
+    refreshStatus();
+    refreshOpenTrades();
+    refreshStrategies();
+  </script>
+</body>
+</html>

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 
 from app.api.schemas import (
     ArmLiveResponse,
@@ -176,6 +178,15 @@ def get_strategy_registry(request: Request) -> StrategyRegistry:
 def build_router() -> APIRouter:
     """Construct API router with control-plane endpoints."""
     router = APIRouter()
+    ui_path = Path(__file__).with_name("web_ui.html")
+
+    @router.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def web_ui_root() -> HTMLResponse:
+        return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
+
+    @router.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+    def web_ui_page() -> HTMLResponse:
+        return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
 
     @router.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:

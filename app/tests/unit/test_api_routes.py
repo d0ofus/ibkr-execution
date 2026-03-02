@@ -122,6 +122,14 @@ def _build_client(*, live_trading: bool = False, ack: str = "", dry_run: bool = 
 def test_health_and_status_endpoints() -> None:
     client, _, _ = _build_client()
 
+    ui_root = client.get("/")
+    assert ui_root.status_code == 200
+    assert "IBKR Exec Control Panel" in ui_root.text
+
+    ui_page = client.get("/ui")
+    assert ui_page.status_code == 200
+    assert "Quick Submit" in ui_page.text
+
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["status"] == "ok"

@@ -15,7 +15,9 @@ Phases 0-11 implemented in this repository with deterministic replay coverage an
    `.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider`
 4. Start API:
    `.\.venv\Scripts\python.exe -m uvicorn app.main:create_application --factory --host 127.0.0.1 --port 8000`
-5. Open API UI:
+5. Open execution UI:
+   `http://127.0.0.1:8000/`
+6. API docs remain available at:
    `http://127.0.0.1:8000/docs`
 
 ## Paper Trading UI Test Flow
