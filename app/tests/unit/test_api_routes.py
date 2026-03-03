@@ -529,3 +529,18 @@ def test_runtime_readiness_and_profile_switch_routes() -> None:
     assert switched.status_code == 200
     switched_payload = switched.json()
     assert switched_payload["selected_profile"] == "live"
+
+    updated = client.put(
+        "/runtime/profile/config",
+        json={
+            "profile": "live",
+            "host": "127.0.0.1",
+            "port": 7496,
+            "client_id": 11,
+            "account": "U999999",
+        },
+    )
+    assert updated.status_code == 200
+    updated_payload = updated.json()
+    assert updated_payload["live_profile"]["port"] == 7496
+    assert updated_payload["live_profile"]["client_id"] == 11

@@ -235,6 +235,15 @@
         <div class="field"><label>&nbsp;</label><button id="switchProfileBtn" class="secondary">Switch Profile</button></div>
         <div class="field"><label>&nbsp;</label><button id="refreshReadinessBtn" class="secondary">Refresh Readiness</button></div>
       </div>
+      <div class="row" style="grid-template-columns: 1.2fr 0.8fr 0.8fr 1.2fr;">
+        <div class="field"><label>Host</label><input id="profileHost" value="127.0.0.1"></div>
+        <div class="field"><label>Port</label><input id="profilePort" value="4002"></div>
+        <div class="field"><label>Client ID</label><input id="profileClientId" value="1"></div>
+        <div class="field"><label>Account</label><input id="profileAccount" value=""></div>
+      </div>
+      <div class="btns" style="margin-bottom:8px;">
+        <button id="saveProfileConfigBtn" class="secondary">Save Profile Settings</button>
+      </div>
       <div id="readinessBanner" class="banner"></div>
       <div id="readinessSummary" class="logs" style="max-height:180px;">Readiness not loaded.</div>
       <div style="margin-top:8px;">
@@ -281,7 +290,8 @@
       "change_pct",
       "bid",
       "ask",
-      "ask_below_high_pct"
+      "ask_below_high_pct",
+      "data_mode"
     ];
 
     const state = {
@@ -291,12 +301,11 @@
       orbByRow: {},
       columns: [...baseColumns],
       selected: new Set(),
-      ws: null,
       sse: null,
-      streamMode: "none",
       connected: false,
       feedHealthy: false,
-      readiness: null
+      readiness: null,
+      lastMarketDataAt: null
     };
 
     const gridHead = document.getElementById("gridHead");
@@ -372,6 +381,19 @@
       renderGrid();
     }
 
+    function clearRowLiveData() {
+      for (const row of state.rows) {
+        const base = state.rowData[row.row_id] || {};
+        state.rowData[row.row_id] = {
+          ...base,
+          delayed: false,
+          data_mode: "stale",
+          stale: true
+        };
+      }
+      renderGrid();
+    }
+
     function selectedRowIds() {
       return [...state.selected];
     }
@@ -412,6 +434,29 @@
     async function refreshRuntimeStatus() {
       try {
         const status = await api("/status");
+        let readiness = null;
+        let workspace = null;
+        try {
+          readiness = await api("/runtime/readiness");
+        } catch {}
+        try {
+          workspace = await api("/workspace/state");
+        } catch {}
+
+        if (readiness) {
+          state.connected = Boolean(readiness.broker_connected);
+          renderReadiness(readiness);
+        }
+        if (workspace) {
+          state.feedHealthy = Boolean(workspace.feed_healthy);
+        } else if (readiness && !readiness.broker_connected) {
+          state.feedHealthy = false;
+        }
+        if (readiness && !readiness.broker_connected) {
+          state.feedHealthy = false;
+        }
+        renderStatus();
+
         runtimeSummary.textContent = `mode=${status.mode} account=${status.account || "(unset)"} live_armed=${status.live_armed} dry_run=${status.dry_run} kill_switch=${status.kill_switch}`;
         if (status.mode === "live") {
           showBanner(gridBanner, "warn", "Live mode armed. Orders can transmit to live account.");
@@ -456,6 +501,11 @@
       state.readiness = readiness;
       const profile = readiness.selected_profile || "paper";
       document.getElementById("profileSelect").value = profile;
+      const selectedProfile = profile === "live" ? readiness.live_profile : readiness.paper_profile;
+      document.getElementById("profileHost").value = selectedProfile.host || "127.0.0.1";
+      document.getElementById("profilePort").value = String(selectedProfile.port || "");
+      document.getElementById("profileClientId").value = String(selectedProfile.client_id || "");
+      document.getElementById("profileAccount").value = selectedProfile.account || "";
       const lines = [
         `selected_profile=${readiness.selected_profile}`,
         `broker_connected=${readiness.broker_connected}`,
@@ -504,6 +554,43 @@
         const detail = parseErrorMessage(err);
         showBanner(readinessBanner, "err", detail);
         log(systemLog, `Profile switch failed: ${detail}`);
+      }
+    }
+
+    async function saveProfileConfig() {
+      const profile = document.getElementById("profileSelect").value;
+      const host = document.getElementById("profileHost").value.trim();
+      const port = Number(document.getElementById("profilePort").value);
+      const clientId = Number(document.getElementById("profileClientId").value);
+      const account = document.getElementById("profileAccount").value.trim();
+
+      if (!host) {
+        showBanner(readinessBanner, "err", "Host is required.");
+        return;
+      }
+      if (!Number.isInteger(port) || port <= 0) {
+        showBanner(readinessBanner, "err", "Port must be a positive integer.");
+        return;
+      }
+      if (!Number.isInteger(clientId) || clientId < 0) {
+        showBanner(readinessBanner, "err", "Client ID must be a non-negative integer.");
+        return;
+      }
+      try {
+        const readiness = await api("/runtime/profile/config", "PUT", {
+          profile,
+          host,
+          port,
+          client_id: clientId,
+          account
+        });
+        renderReadiness(readiness);
+        showBanner(readinessBanner, "ok", `Saved ${profile} profile settings.`);
+        log(systemLog, `Saved ${profile} profile config host=${host} port=${port} client_id=${clientId}.`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(readinessBanner, "err", detail);
+        log(systemLog, `Save profile settings failed: ${detail}`);
       }
     }
 
@@ -608,6 +695,14 @@
       }
     }
 
+    function ensureRequiredColumns(columns) {
+      const next = Array.isArray(columns) ? [...columns] : [];
+      if (!next.includes("data_mode")) {
+        next.push("data_mode");
+      }
+      return next;
+    }
+
     function renderGrid() {
       gridHead.innerHTML = "";
       const head = ["select", "row_id", "symbol", "sec_type", "exchange", "currency", "orb_state", ...state.columns, "actions"];
@@ -689,7 +784,7 @@
       const data = await api("/workspace/state");
       state.workspaceKey = data.workspace_key;
       state.rows = data.rows || [];
-      state.columns = (data.columns && data.columns.length) ? data.columns : [...baseColumns];
+      state.columns = ensureRequiredColumns((data.columns && data.columns.length) ? data.columns : [...baseColumns]);
       state.connected = Boolean(data.connected);
       state.feedHealthy = Boolean(data.feed_healthy);
 
@@ -731,7 +826,14 @@
       }
       const rowId = `${symbol}-${Date.now()}`;
       state.rows.push({ row_id: rowId, symbol, sec_type: secType, exchange, currency, con_id: null, primary_exchange: null });
-      state.rowData[rowId] = { row_id: rowId, symbol, sec_type: secType, exchange, currency };
+      state.rowData[rowId] = {
+        row_id: rowId,
+        symbol,
+        sec_type: secType,
+        exchange,
+        currency,
+        data_mode: "stale"
+      };
       try {
         await saveRows();
         await reloadWorkspace();
@@ -850,56 +952,13 @@
       }
     }
 
-    function connectWs() {
-      if (state.sse) {
-        try { state.sse.close(); } catch {}
-        state.sse = null;
-      }
-      if (state.ws) {
-        try { state.ws.close(); } catch {}
-      }
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/ws/workspace`);
-      state.ws = ws;
-      state.streamMode = "websocket";
-
-      ws.onopen = () => {
-        showBanner(gridBanner, "info", "Streaming via WebSocket.");
-        log(systemLog, "Workspace websocket connected.");
-      };
-      ws.onclose = () => {
-        if (state.streamMode === "websocket") {
-          log(systemLog, "Workspace websocket closed; switching to SSE.");
-          connectSse();
-          return;
-        }
-        log(systemLog, "Workspace websocket closed.");
-      };
-      ws.onerror = () => {
-        log(systemLog, "Workspace websocket error.");
-      };
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          handleWsEvent(message);
-        } catch {
-          log(systemLog, "Failed to parse websocket event.");
-        }
-      };
-    }
-
-    function connectSse() {
-      if (state.ws) {
-        try { state.ws.close(); } catch {}
-        state.ws = null;
-      }
+    function connectStream() {
       if (state.sse) {
         try { state.sse.close(); } catch {}
       }
-      state.streamMode = "sse";
       const source = new EventSource("/sse/workspace");
       state.sse = source;
-      showBanner(gridBanner, "warn", "WebSocket unavailable; streaming via SSE fallback.");
+      showBanner(gridBanner, "info", "Streaming from server.");
       source.onopen = () => {
         log(systemLog, "Workspace SSE connected.");
       };
@@ -912,11 +971,12 @@
         }
       };
       source.onerror = () => {
+        showBanner(gridBanner, "err", "Market stream disconnected. Reconnecting...");
         log(systemLog, "Workspace SSE error; retrying in 2s.");
         try { source.close(); } catch {}
         state.sse = null;
         setTimeout(() => {
-          if (!state.sse) connectSse();
+          if (!state.sse) connectStream();
         }, 2000);
       };
     }
@@ -927,10 +987,11 @@
 
       if (event === "workspace.initial_state") {
         state.workspaceKey = payload.workspace_key || state.workspaceKey;
-        state.columns = payload.columns || state.columns;
+        state.columns = ensureRequiredColumns(payload.columns || state.columns);
         state.rows = payload.rows || state.rows;
         state.connected = Boolean(payload.connected);
         state.feedHealthy = Boolean(payload.feed_healthy);
+        state.lastMarketDataAt = Date.now();
         for (const row of state.rows) {
           state.rowData[row.row_id] = { ...row };
         }
@@ -943,6 +1004,10 @@
       if (event === "market_data.snapshot") {
         if (payload.row_id) {
           state.rowData[payload.row_id] = { ...(state.rowData[payload.row_id] || {}), ...payload };
+          state.lastMarketDataAt = Date.now();
+          if (state.connected && state.feedHealthy && gridBanner.className.includes("err")) {
+            clearBanner(gridBanner);
+          }
           renderGrid();
         }
         return;
@@ -953,6 +1018,10 @@
         state.feedHealthy = Boolean(payload.feed_healthy);
         renderStatus();
         if (payload.reason) log(systemLog, `Feed status: ${payload.reason}`);
+        if (!state.connected || !state.feedHealthy) {
+          clearRowLiveData();
+          showBanner(gridBanner, "err", `Real-time IBKR data unavailable${payload.reason ? `: ${payload.reason}` : "."}`);
+        }
         if (!state.connected || !state.feedHealthy) {
           showBanner(orbBanner, "warn", "ORB is blocked while feed/connectivity is unhealthy.");
         } else if (orbBanner.className.includes("warn") && orbBanner.textContent.includes("blocked")) {
@@ -981,6 +1050,23 @@
       }
     }
 
+    function startDataWatchdog() {
+      setInterval(() => {
+        if (!state.connected) return;
+        if (!state.feedHealthy) return;
+        if (state.rows.length === 0) return;
+        if (!state.lastMarketDataAt) return;
+        const ageMs = Date.now() - state.lastMarketDataAt;
+        if (ageMs > 30000) {
+          state.feedHealthy = false;
+          renderStatus();
+          clearRowLiveData();
+          showBanner(gridBanner, "err", "No real-time IBKR updates received for over 30s.");
+          showBanner(orbBanner, "warn", "ORB blocked because market data is stale.");
+        }
+      }, 5000);
+    }
+
     document.getElementById("addRowBtn").onclick = () => addRow().catch((err) => log(systemLog, err.message));
     document.getElementById("saveColumnsBtn").onclick = saveColumns;
     document.getElementById("orbStartBtn").onclick = startOrb;
@@ -993,11 +1079,19 @@
     document.getElementById("refreshReadinessBtn").onclick = refreshReadiness;
     document.getElementById("switchProfileBtn").onclick = switchProfile;
     document.getElementById("profileSelect").onchange = () => {
-      profileInstructions.textContent = instructionsForProfile(
-        document.getElementById("profileSelect").value,
-        state.readiness
-      );
+      const selected = document.getElementById("profileSelect").value;
+      if (!state.readiness) {
+        refreshReadiness();
+      } else {
+        const profile = selected === "live" ? state.readiness.live_profile : state.readiness.paper_profile;
+        document.getElementById("profileHost").value = profile.host || "127.0.0.1";
+        document.getElementById("profilePort").value = String(profile.port || "");
+        document.getElementById("profileClientId").value = String(profile.client_id || "");
+        document.getElementById("profileAccount").value = profile.account || "";
+      }
+      profileInstructions.textContent = instructionsForProfile(selected, state.readiness);
     };
+    document.getElementById("saveProfileConfigBtn").onclick = saveProfileConfig;
 
     reloadWorkspace()
       .then(() => {
@@ -1005,7 +1099,8 @@
         clearBanner(orbBanner);
         refreshRuntimeStatus();
         refreshReadiness();
-        connectWs();
+        connectStream();
+        startDataWatchdog();
       })
       .catch((err) => {
         const detail = parseErrorMessage(err);

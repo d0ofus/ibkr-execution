@@ -119,6 +119,13 @@ def build_api_dependencies(settings: Settings, *, runtime: ControlPlaneRuntime) 
             BrokerEventType.MARKET_DATA_STALE,
         }:
             market_data_service.set_connectivity(connected=False, reason=event.event_type.value)
+        elif event.event_type == BrokerEventType.IB_ERROR:
+            code = event.payload.get("code")
+            message = event.payload.get("message")
+            market_data_service.set_connectivity(
+                connected=broker_client.is_connected(),
+                reason=f"ib_error code={code} message={message}",
+            )
 
     broker_client.register_event_handler(_handle_broker_event)
 

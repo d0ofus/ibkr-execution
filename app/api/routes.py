@@ -28,6 +28,7 @@ from app.api.schemas import (
     OrbStatusResponse,
     OrbStopRequest,
     RuntimeProfileResponse,
+    RuntimeProfileConfigRequest,
     RuntimeProfileSwitchRequest,
     RuntimeReadinessResponse,
     OrderIntentRequest,
@@ -541,12 +542,56 @@ def build_router() -> APIRouter:
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"failed to switch profile: {exc}",
+                detail=(
+                    f"failed to switch profile: {exc}. "
+                    f"Attempted host={selected.host} port={selected.port} client_id={selected.client_id}. "
+                    "For TWS live use port 7496 (paper 7497) and a unique client ID."
+                ),
             ) from exc
 
         runtime.selected_profile = payload.profile
         if payload.profile == EnvironmentMode.PAPER:
             runtime.live_armed = False
+        return runtime_readiness(
+            settings=settings,
+            runtime=runtime,
+            broker_client=broker_client,
+            profiles=profiles,
+        )
+
+    @router.put("/runtime/profile/config", response_model=RuntimeReadinessResponse)
+    def update_runtime_profile_config(
+        payload: RuntimeProfileConfigRequest,
+        settings: Settings = Depends(get_settings),
+        runtime: ControlPlaneRuntime = Depends(get_runtime),
+        broker_client: BrokerClientLike = Depends(get_broker_client),
+        profiles: dict[EnvironmentMode, BrokerConnectionProfile] = Depends(get_broker_profiles),
+    ) -> RuntimeReadinessResponse:
+        if payload.profile not in {EnvironmentMode.PAPER, EnvironmentMode.LIVE}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="profile must be paper or live")
+        profiles[payload.profile] = BrokerConnectionProfile(
+            host=payload.host.strip(),
+            port=payload.port,
+            client_id=payload.client_id,
+            account=payload.account.strip(),
+        )
+        # If updating active profile, reconnect immediately with new values.
+        if runtime.selected_profile == payload.profile:
+            selected = profiles[payload.profile]
+            try:
+                broker_client.switch_connection_profile(
+                    host=selected.host,
+                    port=selected.port,
+                    client_id=selected.client_id,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"failed to apply active profile settings: {exc}. "
+                        "For TWS live, use port 7496 (paper 7497) and a unique client ID."
+                    ),
+                ) from exc
         return runtime_readiness(
             settings=settings,
             runtime=runtime,

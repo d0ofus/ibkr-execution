@@ -98,6 +98,7 @@ _DEFAULT_COLUMNS: list[str] = [
     "bid",
     "ask",
     "ask_below_high_pct",
+    "data_mode",
 ]
 
 
@@ -121,6 +122,7 @@ class MarketDataService:
         self._instrument_ref_count: dict[InstrumentKey, int] = defaultdict(int)
         self._instrument_subscription_id: dict[InstrumentKey, str] = {}
         self._instrument_metrics: dict[InstrumentKey, tuple[int | None, int | None, Decimal | None]] = {}
+        self._instrument_seed_quote: dict[InstrumentKey, MarketQuote] = {}
 
         self._row_quotes: dict[tuple[str, str], MarketQuote] = {}
         self._row_stale: dict[tuple[str, str], bool] = {}
@@ -462,12 +464,18 @@ class MarketDataService:
         self._row_by_instrument[key].add(row_ref)
         self._instrument_ref_count[key] += 1
         self._row_stale[(workspace_key, row.row_id)] = True
+        seed_quote = self._instrument_seed_quote.get(key)
+        if seed_quote is not None:
+            self._row_quotes[(workspace_key, row.row_id)] = seed_quote
 
         if self._instrument_ref_count[key] > 1:
             return
 
         contract = self._contract_from_row(row)
         self._bootstrap_metrics_locked(key=key, contract=contract)
+        seed_quote = self._instrument_seed_quote.get(key)
+        if seed_quote is not None:
+            self._row_quotes[(workspace_key, row.row_id)] = seed_quote
 
         if not self._broker_client.is_connected():
             return
@@ -494,6 +502,7 @@ class MarketDataService:
         self._row_by_instrument.pop(key, None)
         self._instrument_ref_count.pop(key, None)
         self._instrument_metrics.pop(key, None)
+        self._instrument_seed_quote.pop(key, None)
 
         subscription_id = self._instrument_subscription_id.pop(key, None)
         if subscription_id is None:
@@ -517,6 +526,16 @@ class MarketDataService:
             avg_at_time = self._average_volume_at_time(intraday)
             prev_day_low = self._previous_day_low(daily)
             self._instrument_metrics[key] = (avg_daily, avg_at_time, prev_day_low)
+            seed_quote = self._build_seed_quote(
+                contract=contract,
+                daily=daily,
+                intraday=intraday,
+                avg_volume=avg_daily,
+                avg_volume_at_time=avg_at_time,
+                prev_day_low=prev_day_low,
+            )
+            if seed_quote is not None:
+                self._instrument_seed_quote[key] = seed_quote
         except Exception:
             self._logger.exception("historical_bootstrap_failed symbol=%s", contract.symbol)
             self._instrument_metrics[key] = (None, None, None)
@@ -560,6 +579,55 @@ class MarketDataService:
         if ordered:
             return ordered[-1].low
         return None
+
+    def _build_seed_quote(
+        self,
+        *,
+        contract: ContractRef,
+        daily: list[MarketBar],
+        intraday: list[MarketBar],
+        avg_volume: int | None,
+        avg_volume_at_time: int | None,
+        prev_day_low: Decimal | None,
+    ) -> MarketQuote | None:
+        latest_daily = max(daily, key=lambda item: item.timestamp) if daily else None
+        latest_intraday = max(intraday, key=lambda item: item.timestamp) if intraday else None
+
+        last = latest_intraday.close if latest_intraday is not None else (latest_daily.close if latest_daily else None)
+        day_high = latest_intraday.high if latest_intraday is not None else (latest_daily.high if latest_daily else None)
+        day_low = latest_intraday.low if latest_intraday is not None else (latest_daily.low if latest_daily else None)
+        close = latest_daily.close if latest_daily is not None else last
+        volume = latest_intraday.volume if latest_intraday is not None else (latest_daily.volume if latest_daily else None)
+
+        if (
+            last is None
+            and day_high is None
+            and day_low is None
+            and close is None
+            and volume is None
+            and avg_volume is None
+            and avg_volume_at_time is None
+            and prev_day_low is None
+        ):
+            return None
+
+        return MarketQuote(
+            symbol=contract.symbol.upper(),
+            sec_type=contract.sec_type.upper(),
+            exchange=contract.exchange.upper(),
+            currency=contract.currency.upper(),
+            con_id=contract.con_id if contract.con_id > 0 else None,
+            primary_exchange=(contract.primary_exchange.upper() if contract.primary_exchange else None),
+            last=last,
+            close=close,
+            day_high=day_high,
+            day_low=day_low,
+            prev_day_low=prev_day_low,
+            volume=volume,
+            avg_volume=avg_volume,
+            avg_volume_at_time=avg_volume_at_time,
+            updated_at=datetime.now(tz=UTC),
+        )
 
     def _resubscribe_all_locked(self) -> None:
         for key, refs in self._instrument_ref_count.items():
@@ -636,11 +704,14 @@ class MarketDataService:
                 exchange=row.exchange,
                 currency=row.currency,
                 stale=True,
+                data_mode="stale",
             )
 
         stale = self._is_row_stale_locked(row_key=row_key, updated_at=quote.updated_at)
+        effective_bid = quote.bid if quote.bid is not None else quote.last
+        effective_ask = quote.ask if quote.ask is not None else quote.last
         change_pct = self._compute_change_pct(quote.last, quote.close)
-        ask_below_high_pct = self._compute_ask_below_high_pct(quote.ask, quote.day_high)
+        ask_below_high_pct = self._compute_ask_below_high_pct(effective_ask, quote.day_high)
 
         return WorkspaceRowSnapshot(
             row_id=row_id,
@@ -657,11 +728,12 @@ class MarketDataService:
             prev_day_low=quote.prev_day_low,
             close=quote.close,
             change_pct=change_pct,
-            bid=quote.bid,
-            ask=quote.ask,
+            bid=effective_bid,
+            ask=effective_ask,
             ask_below_high_pct=ask_below_high_pct,
             delayed=quote.delayed,
             stale=stale,
+            data_mode=("stale" if stale else ("delayed" if quote.delayed else "live")),
             updated_at=quote.updated_at,
         )
 
@@ -670,7 +742,11 @@ class MarketDataService:
         if explicit_stale:
             return True
         now = datetime.now(tz=UTC)
-        return now - updated_at > timedelta(seconds=self._stale_after)
+        quote = self._row_quotes.get(row_key)
+        stale_after = self._stale_after
+        if quote is not None and quote.delayed:
+            stale_after = max(self._stale_after, 300.0)
+        return now - updated_at > timedelta(seconds=stale_after)
 
     def _initial_state_payload_locked(self, workspace_key: str) -> WorkspaceInitialStatePayload:
         state = self._workspaces.setdefault(workspace_key, _WorkspaceState(columns=list(_DEFAULT_COLUMNS)))

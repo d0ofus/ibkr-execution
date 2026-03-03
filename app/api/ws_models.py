@@ -31,6 +31,7 @@ class WorkspaceRowSnapshot(BaseModel):
     ask_below_high_pct: Decimal | None = None
     delayed: bool = False
     stale: bool = True
+    data_mode: str = "stale"
     updated_at: datetime | None = None
 
 

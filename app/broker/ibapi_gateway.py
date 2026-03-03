@@ -90,6 +90,8 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._quote_contract_key_to_request_id: dict[str, int] = {}
         self._quote_request_to_contract: dict[int, ContractRef] = {}
         self._quote_delayed_by_request_id: dict[int, bool] = {}
+        self._quote_delayed_retry_attempted: set[int] = set()
+        self._quote_realtime_bar_request_to_contract: dict[int, ContractRef] = {}
         self._quote_handlers: list[Callable[[MarketQuote], None]] = []
         self._pending_historical_requests: dict[int, _PendingHistoricalData] = {}
 
@@ -116,6 +118,8 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._quote_contract_key_to_request_id.clear()
         self._quote_request_to_contract.clear()
         self._quote_delayed_by_request_id.clear()
+        self._quote_delayed_retry_attempted.clear()
+        self._quote_realtime_bar_request_to_contract.clear()
 
         if self._reader_thread is not None and self._reader_thread.is_alive():
             self._reader_thread.join(timeout=2.0)
@@ -231,9 +235,20 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._quote_contract_key_to_request_id[contract_key] = request_id
         self._quote_request_to_contract[request_id] = contract
         self._quote_delayed_by_request_id[request_id] = False
+        self._quote_delayed_retry_attempted.discard(request_id)
 
         ib_contract = self._to_ib_contract(contract)
-        super().reqMktData(request_id, ib_contract, "233", False, False, [])
+        # Always request live first; fall back to delayed only if IB rejects.
+        super().reqMarketDataType(1)
+        if contract.sec_type.upper() == "CRYPTO":
+            # Crypto can trigger IB API fractional-size compatibility errors on reqMktData.
+            # Use 5-second real-time bars as a quote proxy for robust live updates.
+            self._quote_realtime_bar_request_to_contract[request_id] = contract
+            super().reqRealTimeBars(request_id, ib_contract, 5, "TRADES", False, [])
+            return str(request_id)
+
+        # Use default quote ticks for broad compatibility.
+        super().reqMktData(request_id, ib_contract, "", False, False, [])
         return str(request_id)
 
     def unsubscribe_quote(self, contract_or_sub_id: ContractRef | str) -> None:
@@ -253,9 +268,14 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         if request_id is None:
             return
 
-        super().cancelMktData(request_id)
+        if request_id in self._quote_realtime_bar_request_to_contract:
+            super().cancelRealTimeBars(request_id)
+            self._quote_realtime_bar_request_to_contract.pop(request_id, None)
+        else:
+            super().cancelMktData(request_id)
         contract = self._quote_request_to_contract.pop(request_id, None)
         self._quote_delayed_by_request_id.pop(request_id, None)
+        self._quote_delayed_retry_attempted.discard(request_id)
         if contract is not None:
             self._quote_contract_key_to_request_id.pop(self._contract_key(contract), None)
 
@@ -373,6 +393,8 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         if pending_historical is not None:
             pending_historical.error_message = f"IB error {errorCode}: {errorString}"
             pending_historical.completed.set()
+        if reqId in self._quote_request_to_contract:
+            self._handle_quote_error(req_id=reqId, error_code=errorCode, error_message=errorString)
 
         self._logger.warning(
             "ib_error req_id=%s code=%s message=%s",
@@ -418,6 +440,17 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             )
             for handler in self._bar_handlers:
                 handler(market_bar)
+        quote_contract = self._quote_realtime_bar_request_to_contract.get(reqId)
+        if quote_contract is not None:
+            self._emit_quote_update(
+                req_id=reqId,
+                values={
+                    "last": Decimal(str(close)),
+                    "day_high": Decimal(str(high)),
+                    "day_low": Decimal(str(low)),
+                    "volume": int(volume),
+                },
+            )
         _ = (wap, count)
 
     def historicalData(self, reqId: int, bar: BarData) -> None:  # noqa: N802
@@ -630,6 +663,52 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
 
         for handler in self._quote_handlers:
             handler(quote)
+
+    def _handle_quote_error(self, *, req_id: int, error_code: int, error_message: str) -> None:
+        delayed_fallback_codes = {354, 10090, 10167, 10285}
+        if error_code not in delayed_fallback_codes:
+            return
+        if self._quote_delayed_by_request_id.get(req_id, False):
+            return
+        if req_id in self._quote_delayed_retry_attempted:
+            return
+
+        contract = self._quote_request_to_contract.get(req_id)
+        if contract is None:
+            return
+
+        self._quote_delayed_retry_attempted.add(req_id)
+        try:
+            self._retry_quote_as_delayed(req_id=req_id, contract=contract)
+            self._quote_delayed_by_request_id[req_id] = True
+            self._emit_quote_update(req_id=req_id, values={"delayed": True})
+            self._logger.warning(
+                "quote_fallback_delayed req_id=%s symbol=%s code=%s message=%s",
+                req_id,
+                contract.symbol,
+                error_code,
+                error_message,
+            )
+        except Exception:
+            self._logger.exception(
+                "quote_fallback_delayed_failed req_id=%s symbol=%s",
+                req_id,
+                contract.symbol,
+            )
+
+    def _retry_quote_as_delayed(self, *, req_id: int, contract: ContractRef) -> None:
+        ib_contract = self._to_ib_contract(contract)
+        if req_id in self._quote_realtime_bar_request_to_contract:
+            super().cancelRealTimeBars(req_id)
+        else:
+            super().cancelMktData(req_id)
+
+        super().reqMarketDataType(3)
+        if contract.sec_type.upper() == "CRYPTO":
+            self._quote_realtime_bar_request_to_contract[req_id] = contract
+            super().reqRealTimeBars(req_id, ib_contract, 5, "TRADES", False, [])
+        else:
+            super().reqMktData(req_id, ib_contract, "", False, False, [])
 
     def _pending_historical_symbol(self, request_id: int) -> str:
         symbol = self._bar_subscription_symbols.get(request_id)

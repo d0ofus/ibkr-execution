@@ -131,6 +131,7 @@ def test_websocket_queue_receives_initial_and_snapshot_events() -> None:
         snapshot_event = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert snapshot_event.event == "market_data.snapshot"
         assert snapshot_event.payload["row_id"] == "AAPL-1"
+        assert snapshot_event.payload["data_mode"] == "live"
 
         status_event = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert status_event.event == "market_data.status"
@@ -153,3 +154,26 @@ def test_disconnect_emits_market_data_status_event() -> None:
         assert status_event.payload["connected"] is False
 
     asyncio.run(_run())
+
+
+def test_seed_quote_from_historical_populates_initial_snapshot_fields() -> None:
+    broker = FakeBrokerClient()
+    service = MarketDataService(broker_client=broker, stale_after_seconds=30.0)
+    workspace = "local:paper"
+    service.set_rows(
+        workspace,
+        [WorkspaceRow(row_id="AAPL-1", symbol="AAPL", sec_type="STK", exchange="SMART", currency="USD")],
+    )
+
+    snapshot = service.snapshot_row(workspace, "AAPL-1")
+    assert snapshot is not None
+    assert snapshot.last == Decimal("100")
+    assert snapshot.day_high == Decimal("101")
+    assert snapshot.day_low == Decimal("99")
+    assert snapshot.close == Decimal("101")
+    assert snapshot.avg_volume == 1100
+    assert snapshot.avg_volume_at_time == 500
+    assert snapshot.prev_day_low == Decimal("95")
+    assert snapshot.bid == Decimal("100")
+    assert snapshot.ask == Decimal("100")
+    assert snapshot.data_mode == "stale"

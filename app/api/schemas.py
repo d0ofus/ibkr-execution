@@ -263,3 +263,13 @@ class RuntimeProfileSwitchRequest(BaseModel):
     """Request payload for switching broker connection profile."""
 
     profile: EnvironmentMode
+
+
+class RuntimeProfileConfigRequest(BaseModel):
+    """Request payload for updating one broker runtime profile."""
+
+    profile: EnvironmentMode
+    host: str
+    port: int = Field(gt=0)
+    client_id: int = Field(ge=0)
+    account: str = ""
