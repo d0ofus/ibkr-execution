@@ -17,7 +17,9 @@ Phases 0-11 implemented in this repository with deterministic replay coverage an
    `.\.venv\Scripts\python.exe -m uvicorn app.main:create_application --factory --host 127.0.0.1 --port 8000`
 5. Open execution UI:
    `http://127.0.0.1:8000/`
-6. API docs remain available at:
+6. Open market-data workspace UI:
+   `http://127.0.0.1:8000/workspace`
+7. API docs remain available at:
    `http://127.0.0.1:8000/docs`
 
 ## Strategy UI Workflow
@@ -39,6 +41,35 @@ Phases 0-11 implemented in this repository with deterministic replay coverage an
    - `POST /contracts/pin` with `environment=paper`
    - `POST /orders/intent` to transmit bracket order
 5. Verify orders in IB paper account.
+
+## Workspace UI Flow (Market Data + ORB)
+
+1. Open `http://127.0.0.1:8000/workspace`.
+2. Add grid rows (`Ticker`, `Type`, `Exchange`, `Currency`).
+3. Configure visible columns and click **Save Columns**.
+4. Select one or more rows and set ORB parameters:
+   - `qty`
+   - `x1` (absolute price for breakeven stop move)
+   - `x2` (absolute price for partial take-profit)
+5. Click **Start ORB (Selected)**.
+6. Observe live feed updates over websocket (`/ws/workspace`) and ORB events in panel logs.
+7. Use **Live Readiness** panel to:
+   - switch broker profile (`paper`/`live`) without editing `.env`
+   - validate readiness gates and connection state
+   - follow profile-specific connection instructions in UI
+
+## Workspace/ORB API Endpoints
+
+1. `GET /workspace/state`
+2. `PUT /workspace/rows`
+3. `DELETE /workspace/rows/{row_id}`
+4. `PUT /workspace/columns`
+5. `POST /execution/orb/start`
+6. `POST /execution/orb/stop`
+7. `GET /execution/orb/status`
+8. `WS /ws/workspace`
+9. `GET /runtime/readiness`
+10. `PUT /runtime/profile`
 
 ## Live Arming Gate
 

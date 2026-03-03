@@ -45,6 +45,18 @@ class MarketBar:
 
 
 @dataclass(frozen=True)
+class MarketDataInstrument:
+    """Instrument descriptor for market-data subscriptions."""
+
+    symbol: str
+    sec_type: str
+    exchange: str
+    currency: str
+    con_id: int | None = None
+    primary_exchange: str | None = None
+
+
+@dataclass(frozen=True)
 class OrderIntent:
     """Strategy or manual intent before broker transmission."""
 
@@ -127,4 +139,39 @@ class AuditLogEvent:
     payload: dict[str, object]
     payload_hash: str
     created_at: datetime = field(default_factory=utc_now)
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class MarketQuote:
+    """Normalized quote snapshot/update emitted by broker transports."""
+
+    symbol: str
+    sec_type: str
+    exchange: str
+    currency: str
+    con_id: int | None = None
+    primary_exchange: str | None = None
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    last: Decimal | None = None
+    close: Decimal | None = None
+    day_high: Decimal | None = None
+    day_low: Decimal | None = None
+    prev_day_low: Decimal | None = None
+    volume: int | None = None
+    avg_volume: int | None = None
+    avg_volume_at_time: int | None = None
+    delayed: bool = False
+    updated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(frozen=True)
+class WorkspaceSettings:
+    """Persisted workspace grid settings scoped to user and environment."""
+
+    user_key: str
+    environment: EnvironmentMode
+    settings_json: str
+    updated_at: datetime = field(default_factory=utc_now)
     id: int | None = None

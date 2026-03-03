@@ -324,3 +324,42 @@ def test_cancel_trade_cancels_broker_orders_and_marks_state() -> None:
     assert len(broker.cancel_calls) == 2
     assert repo.trades[trade_id].state == TradeState.CANCELLED
     assert trade_id not in manager.list_open_trades()
+
+
+def test_submit_fixed_qty_entry_uses_explicit_quantity() -> None:
+    manager, broker, _ = _build_manager()
+
+    trade_id = manager.submit_fixed_qty_entry(
+        symbol="AAPL",
+        side=Side.BUY,
+        entry_price=Decimal("100.00"),
+        stop_price=Decimal("99.00"),
+        quantity=40,
+        strategy_id="workspace_orb",
+        intent_id="orb-fixed-1",
+    )
+
+    assert trade_id
+    assert len(broker.place_calls) == 1
+    _, orders = broker.place_calls[0]
+    assert orders[0].quantity == 40
+    assert orders[1].quantity == 40
+
+
+def test_take_profit_partial_reduces_stop_quantity_to_remaining() -> None:
+    manager, broker, _ = _build_manager()
+    trade_id = manager.submit_intent(_make_intent("intent-partial"))
+    manager.on_fill_update(trade_id, filled_quantity=250)
+
+    result = manager.take_profit_partial(trade_id, qty=80, limit_price=Decimal("102.00"))
+
+    assert result is True
+    assert len(broker.place_calls) == 4
+
+    _, take_profit_orders = broker.place_calls[2]
+    assert take_profit_orders[0].role.value == "take_profit"
+    assert take_profit_orders[0].quantity == 80
+
+    _, stop_modify_orders = broker.place_calls[3]
+    assert stop_modify_orders[0].order_type == "MODIFY_STP"
+    assert stop_modify_orders[0].quantity == 170

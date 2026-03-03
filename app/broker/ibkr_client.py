@@ -11,7 +11,7 @@ from app.broker.ibkr_events import BrokerEvent, BrokerEventType, IbkrEventAdapte
 from app.broker.rate_limiter import PacingRateLimiter
 from app.broker.reconnect import ReconnectAction, ReconnectDecision, ReconnectSupervisor
 from app.domain.errors import BrokerConnectivityError
-from app.domain.models import BrokerOrderSpec, ContractRef
+from app.domain.models import BrokerOrderSpec, ContractRef, MarketBar
 
 
 class IbkrTransport(Protocol):
@@ -44,6 +44,27 @@ class IbkrTransport(Protocol):
     def subscribe_bars(self, contract: ContractRef, bar_size: str) -> None:
         """Subscribe to bar market data."""
 
+    def subscribe_quote(self, contract: ContractRef) -> str:
+        """Subscribe quote stream and return broker subscription identifier."""
+
+    def unsubscribe_quote(self, contract_or_sub_id: ContractRef | str) -> None:
+        """Unsubscribe quote stream for the given contract or subscription ID."""
+
+    def request_historical_daily(self, contract: ContractRef, *, sessions: int) -> list[MarketBar]:
+        """Fetch historical daily bars for the contract."""
+
+    def request_historical_intraday(
+        self,
+        contract: ContractRef,
+        *,
+        sessions: int,
+        bar_size: str,
+    ) -> list[MarketBar]:
+        """Fetch historical intraday bars for the contract."""
+
+    def set_connection_params(self, *, host: str, port: int, client_id: int) -> None:
+        """Update transport connection params for the next connect attempt."""
+
 
 class BrokerClient(Protocol):
     """Protocol for broker client interactions used by OrderManager."""
@@ -74,6 +95,27 @@ class BrokerClient(Protocol):
 
     def subscribe_bars(self, contract: ContractRef, bar_size: str) -> None:
         """Subscribe to bar market data for a qualified contract."""
+
+    def subscribe_quote(self, contract: ContractRef) -> str:
+        """Subscribe quote stream and return broker subscription identifier."""
+
+    def unsubscribe_quote(self, contract_or_sub_id: ContractRef | str) -> None:
+        """Unsubscribe quote stream for the given contract or subscription ID."""
+
+    def request_historical_daily(self, contract: ContractRef, *, sessions: int) -> list[MarketBar]:
+        """Fetch historical daily bars for the contract."""
+
+    def request_historical_intraday(
+        self,
+        contract: ContractRef,
+        *,
+        sessions: int,
+        bar_size: str,
+    ) -> list[MarketBar]:
+        """Fetch historical intraday bars for the contract."""
+
+    def switch_connection_profile(self, *, host: str, port: int, client_id: int) -> None:
+        """Reconnect using a different socket connection profile."""
 
 
 @dataclass(frozen=True)
@@ -171,6 +213,51 @@ class IbkrClient:
         self._acquire_pacing(tokens=1)
         self._bar_subscriptions[contract.con_id] = normalized
         self._transport.subscribe_bars(contract, normalized)
+
+    def subscribe_quote(self, contract: ContractRef) -> str:
+        """Subscribe quote market data for a qualified contract."""
+        self._acquire_pacing(tokens=1)
+        return self._transport.subscribe_quote(contract)
+
+    def unsubscribe_quote(self, contract_or_sub_id: ContractRef | str) -> None:
+        """Unsubscribe quote market data for a contract or subscription ID."""
+        self._acquire_pacing(tokens=1)
+        self._transport.unsubscribe_quote(contract_or_sub_id)
+
+    def request_historical_daily(self, contract: ContractRef, *, sessions: int) -> list[MarketBar]:
+        """Request historical daily bars for bootstrap calculations."""
+        if sessions <= 0:
+            raise ValueError("sessions must be positive")
+        self._acquire_pacing(tokens=1)
+        return self._transport.request_historical_daily(contract, sessions=sessions)
+
+    def request_historical_intraday(
+        self,
+        contract: ContractRef,
+        *,
+        sessions: int,
+        bar_size: str = "1 min",
+    ) -> list[MarketBar]:
+        """Request historical intraday bars for bootstrap calculations."""
+        if sessions <= 0:
+            raise ValueError("sessions must be positive")
+        normalized_bar_size = bar_size.strip()
+        if not normalized_bar_size:
+            raise ValueError("bar_size cannot be empty")
+        self._acquire_pacing(tokens=1)
+        return self._transport.request_historical_intraday(
+            contract,
+            sessions=sessions,
+            bar_size=normalized_bar_size,
+        )
+
+    def switch_connection_profile(self, *, host: str, port: int, client_id: int) -> None:
+        """Reconnect using a different socket connection profile."""
+        was_connected = self.is_connected()
+        if was_connected:
+            self.disconnect()
+        self._transport.set_connection_params(host=host, port=port, client_id=client_id)
+        self.connect()
 
     def heartbeat(self, *, timestamp: datetime | None = None) -> None:
         """Record broker heartbeat signal."""

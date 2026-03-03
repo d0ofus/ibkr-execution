@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strategy List</title>
+  <style>
+    :root {
+      --bg: #eef3f8;
+      --panel: #fff;
+      --text: #10253a;
+      --muted: #5f7083;
+      --accent: #0b6db7;
+      --border: #d3dde7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #f7fbff 0%, var(--bg) 100%);
+    }
+    .wrap {
+      width: calc(100vw - 24px);
+      margin: 12px auto;
+      display: grid;
+      grid-template-columns: 1.2fr 2fr;
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    h2 { margin: 0 0 8px; font-size: 17px; }
+    .sub { color: var(--muted); margin: 0 0 10px; font-size: 13px; }
+    button {
+      border: none;
+      border-radius: 7px;
+      background: var(--accent);
+      color: #fff;
+      padding: 8px 10px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-right: 6px;
+    }
+    button.secondary { background: #556a82; }
+    .list {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 70vh;
+      overflow: auto;
+    }
+    .item {
+      border-bottom: 1px solid var(--border);
+      padding: 10px;
+      cursor: pointer;
+    }
+    .item:last-child { border-bottom: none; }
+    .item.active { background: #eef6ff; }
+    .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+    .muted { color: var(--muted); }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: #e7f2ff;
+      border: 1px solid #c6dff7;
+      color: #23557d;
+      margin: 0 4px 4px 0;
+    }
+    pre {
+      background: #f8fbff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 55vh;
+      overflow: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .logic {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+      margin-bottom: 10px;
+      background: #fbfdff;
+    }
+    @media (max-width: 980px) {
+      .wrap { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card">
+      <h1>Strategy List</h1>
+      <p class="sub">Inspect strategy definitions and how they reference live market variables.</p>
+      <button id="refreshBtn">Refresh</button>
+      <button id="workspaceBtn" class="secondary">Open Workspace</button>
+      <div id="strategyList" class="list" style="margin-top:10px;"></div>
+    </section>
+
+    <section class="card">
+      <h2 id="detailTitle">Select a strategy</h2>
+      <div id="logicBox" class="logic">No strategy selected.</div>
+      <div>
+        <strong style="font-size:13px;">Live Data Variables Referenced</strong>
+        <div id="varsBox" style="margin-top:8px;"></div>
+      </div>
+      <div style="margin-top:10px;">
+        <strong style="font-size:13px;">Source</strong>
+        <pre id="sourceBox">-</pre>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const listEl = document.getElementById("strategyList");
+    const detailTitle = document.getElementById("detailTitle");
+    const logicBox = document.getElementById("logicBox");
+    const varsBox = document.getElementById("varsBox");
+    const sourceBox = document.getElementById("sourceBox");
+    let selectedId = null;
+
+    async function api(path) {
+      const res = await fetch(path);
+      const text = await res.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+      if (!res.ok) throw new Error(`${res.status}: ${JSON.stringify(data)}`);
+      return data;
+    }
+
+    function extractVariables(source) {
+      const known = [
+        "day_low",
+        "day_high",
+        "session_low",
+        "session_high",
+        "opening_range_low",
+        "opening_range_high",
+        "last_price",
+        "close",
+        "bid",
+        "ask",
+        "volume",
+        "avg_volume",
+        "avg_volume_at_time"
+      ];
+      const lower = String(source || "").toLowerCase();
+      return known.filter((token) => lower.includes(token));
+    }
+
+    function summarizeLogic(source) {
+      const text = String(source || "").toLowerCase();
+      const lines = [];
+      if (text.includes("enter_long")) lines.push("Entry action: enter_long is configured.");
+      if (text.includes("crosses_above")) lines.push("Trigger logic includes crosses_above condition.");
+      if (text.includes("move_stop_to_breakeven")) lines.push("Stop management includes move_stop_to_breakeven.");
+      if (text.includes("once_per_day")) lines.push("Execution constraint: once_per_day.");
+      if (text.includes("within_time")) lines.push("Execution constraint: within_time session window.");
+      if (!lines.length) lines.push("No known DSL action/condition keywords detected.");
+      return lines;
+    }
+
+    function renderVariables(source) {
+      varsBox.innerHTML = "";
+      const variables = extractVariables(source);
+      if (!variables.length) {
+        varsBox.innerHTML = "<span class='muted'>No known live-data variables detected in source.</span>";
+        return;
+      }
+      for (const name of variables) {
+        const tag = document.createElement("span");
+        tag.className = "pill";
+        tag.textContent = name;
+        varsBox.appendChild(tag);
+      }
+    }
+
+    function renderLogic(source) {
+      const points = summarizeLogic(source);
+      logicBox.innerHTML = points.map((point) => `<div>- ${point}</div>`).join("");
+    }
+
+    async function loadDetail(strategyId) {
+      try {
+        const definition = await api(`/strategies/definition/${encodeURIComponent(strategyId)}`);
+        detailTitle.textContent = `${definition.strategy_id} (${definition.source_format})`;
+        sourceBox.textContent = definition.source_payload || "";
+        renderVariables(definition.source_payload || "");
+        renderLogic(definition.source_payload || "");
+      } catch (err) {
+        detailTitle.textContent = "Strategy detail error";
+        logicBox.textContent = String(err.message || err);
+        varsBox.innerHTML = "";
+        sourceBox.textContent = "";
+      }
+    }
+
+    async function loadStrategies() {
+      try {
+        const data = await api("/strategies");
+        const list = data.strategies || [];
+        listEl.innerHTML = "";
+        if (!list.length) {
+          listEl.innerHTML = "<div class='item muted'>No strategies found.</div>";
+          detailTitle.textContent = "No strategies";
+          logicBox.textContent = "Create or upsert a strategy first.";
+          varsBox.innerHTML = "";
+          sourceBox.textContent = "";
+          return;
+        }
+
+        for (const strategy of list) {
+          const item = document.createElement("div");
+          item.className = `item ${selectedId === strategy.strategy_id ? "active" : ""}`;
+          item.innerHTML = `
+            <div><strong>${strategy.strategy_id}</strong></div>
+            <div class="row muted">
+              <span>running=${strategy.running ? "yes" : "no"}</span>
+              <span>symbol=${strategy.symbol || "-"}</span>
+            </div>
+            <div class="row muted">
+              <span>enabled=${strategy.enabled === null ? "-" : (strategy.enabled ? "yes" : "no")}</span>
+              <span>${strategy.last_error || ""}</span>
+            </div>
+          `;
+          item.onclick = () => {
+            selectedId = strategy.strategy_id;
+            loadStrategies().then(() => loadDetail(strategy.strategy_id));
+          };
+          listEl.appendChild(item);
+        }
+
+        if (!selectedId) {
+          selectedId = list[0].strategy_id;
+          await loadDetail(selectedId);
+        }
+      } catch (err) {
+        listEl.innerHTML = `<div class='item'>${String(err.message || err)}</div>`;
+      }
+    }
+
+    document.getElementById("refreshBtn").onclick = () => {
+      selectedId = null;
+      loadStrategies();
+    };
+    document.getElementById("workspaceBtn").onclick = () => { window.location.href = "/workspace"; };
+
+    loadStrategies();
+  </script>
+</body>
+</html>

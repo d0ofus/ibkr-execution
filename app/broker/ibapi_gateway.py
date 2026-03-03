@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 import logging
 import threading
+import re
 from typing import Any
 from collections.abc import Callable
 
@@ -20,7 +21,7 @@ from ibapi.wrapper import EWrapper
 
 from app.broker.contracts import ContractCandidate
 from app.domain.errors import BrokerConnectivityError
-from app.domain.models import BrokerOrderSpec, ContractRef, MarketBar
+from app.domain.models import BrokerOrderSpec, ContractRef, MarketBar, MarketQuote
 
 
 @dataclass
@@ -39,6 +40,15 @@ class _PendingOrderAck:
     completed: threading.Event = field(default_factory=threading.Event)
     acknowledged: bool = False
     rejected: bool = False
+    error_message: str | None = None
+
+
+@dataclass
+class _PendingHistoricalData:
+    """Pending synchronous historical market-data request."""
+
+    completed: threading.Event = field(default_factory=threading.Event)
+    bars: list[MarketBar] = field(default_factory=list)
     error_message: str | None = None
 
 
@@ -77,6 +87,11 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._bar_subscription_symbols: dict[int, str] = {}
         self._bar_handlers: list[Callable[[MarketBar], None]] = []
         self._order_status_handlers: list[Callable[[int, str, int, int], None]] = []
+        self._quote_contract_key_to_request_id: dict[str, int] = {}
+        self._quote_request_to_contract: dict[int, ContractRef] = {}
+        self._quote_delayed_by_request_id: dict[int, bool] = {}
+        self._quote_handlers: list[Callable[[MarketQuote], None]] = []
+        self._pending_historical_requests: dict[int, _PendingHistoricalData] = {}
 
     def connect(self) -> None:
         """Connect to IB API socket and wait for next valid order ID callback."""
@@ -98,10 +113,21 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         if self.isConnected():
             EClient.disconnect(self)
         self._connected_event.clear()
+        self._quote_contract_key_to_request_id.clear()
+        self._quote_request_to_contract.clear()
+        self._quote_delayed_by_request_id.clear()
 
         if self._reader_thread is not None and self._reader_thread.is_alive():
             self._reader_thread.join(timeout=2.0)
         self._reader_thread = None
+
+    def set_connection_params(self, *, host: str, port: int, client_id: int) -> None:
+        """Update socket connection parameters for subsequent connect() calls."""
+        if self.is_connected():
+            raise BrokerConnectivityError("Cannot change connection params while connected.")
+        self._host = host
+        self._port = port
+        self._client_id = client_id
 
     def is_connected(self) -> bool:
         """Return current connection status."""
@@ -191,6 +217,70 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         self._bar_subscription_symbols[request_id] = contract.symbol.upper()
         super().reqRealTimeBars(request_id, ib_contract, 5, "TRADES", True, [])
 
+    def subscribe_quote(self, contract: ContractRef) -> str:
+        """Subscribe tick-level quote data for the given contract."""
+        if not self.is_connected():
+            raise BrokerConnectivityError("IB API not connected.")
+
+        contract_key = self._contract_key(contract)
+        existing = self._quote_contract_key_to_request_id.get(contract_key)
+        if existing is not None:
+            return str(existing)
+
+        request_id = self._reserve_request_id()
+        self._quote_contract_key_to_request_id[contract_key] = request_id
+        self._quote_request_to_contract[request_id] = contract
+        self._quote_delayed_by_request_id[request_id] = False
+
+        ib_contract = self._to_ib_contract(contract)
+        super().reqMktData(request_id, ib_contract, "233", False, False, [])
+        return str(request_id)
+
+    def unsubscribe_quote(self, contract_or_sub_id: ContractRef | str) -> None:
+        """Unsubscribe tick-level quote data for the given contract or subscription ID."""
+        request_id: int | None = None
+        if isinstance(contract_or_sub_id, ContractRef):
+            contract_key = self._contract_key(contract_or_sub_id)
+            request_id = self._quote_contract_key_to_request_id.get(contract_key)
+            if request_id is not None:
+                self._quote_contract_key_to_request_id.pop(contract_key, None)
+        else:
+            try:
+                request_id = int(contract_or_sub_id)
+            except ValueError:
+                request_id = None
+
+        if request_id is None:
+            return
+
+        super().cancelMktData(request_id)
+        contract = self._quote_request_to_contract.pop(request_id, None)
+        self._quote_delayed_by_request_id.pop(request_id, None)
+        if contract is not None:
+            self._quote_contract_key_to_request_id.pop(self._contract_key(contract), None)
+
+    def request_historical_daily(self, contract: ContractRef, *, sessions: int) -> list[MarketBar]:
+        """Synchronously fetch daily historical bars for the given contract."""
+        return self._request_historical_bars(
+            contract=contract,
+            sessions=sessions,
+            bar_size="1 day",
+        )
+
+    def request_historical_intraday(
+        self,
+        contract: ContractRef,
+        *,
+        sessions: int,
+        bar_size: str,
+    ) -> list[MarketBar]:
+        """Synchronously fetch intraday historical bars for the given contract."""
+        return self._request_historical_bars(
+            contract=contract,
+            sessions=sessions,
+            bar_size=bar_size,
+        )
+
     def register_realtime_bar_handler(self, handler: Callable[[MarketBar], None]) -> None:
         """Register callback for incoming IB real-time bars."""
         self._bar_handlers.append(handler)
@@ -198,6 +288,10 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
     def register_order_status_handler(self, handler: Callable[[int, str, int, int], None]) -> None:
         """Register callback for normalized order status updates."""
         self._order_status_handlers.append(handler)
+
+    def register_quote_handler(self, handler: Callable[[MarketQuote], None]) -> None:
+        """Register callback for incoming quote updates."""
+        self._quote_handlers.append(handler)
 
     def qualify(self, symbol: str) -> list[ContractCandidate]:
         """Synchronously qualify a US equity symbol against IB contract details."""
@@ -275,6 +369,10 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             pending_order_ack.rejected = True
             pending_order_ack.error_message = f"IB error {errorCode}: {errorString}"
             pending_order_ack.completed.set()
+        pending_historical = self._pending_historical_requests.get(reqId)
+        if pending_historical is not None:
+            pending_historical.error_message = f"IB error {errorCode}: {errorString}"
+            pending_historical.completed.set()
 
         self._logger.warning(
             "ib_error req_id=%s code=%s message=%s",
@@ -323,8 +421,84 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
         _ = (wap, count)
 
     def historicalData(self, reqId: int, bar: BarData) -> None:  # noqa: N802
-        """IB callback placeholder for historical bars."""
-        self._logger.debug("historical_data req_id=%s bar_date=%s", reqId, bar.date)
+        """IB callback for historical bars."""
+        pending = self._pending_historical_requests.get(reqId)
+        if pending is None:
+            self._logger.debug("historical_data req_id=%s bar_date=%s", reqId, bar.date)
+            return
+
+        parsed_timestamp = self._parse_historical_bar_timestamp(bar.date)
+        pending.bars.append(
+            MarketBar(
+                symbol=self._pending_historical_symbol(reqId),
+                timestamp=parsed_timestamp,
+                open=Decimal(str(bar.open)),
+                high=Decimal(str(bar.high)),
+                low=Decimal(str(bar.low)),
+                close=Decimal(str(bar.close)),
+                volume=int(float(bar.volume)),
+            )
+        )
+
+    def historicalDataEnd(self, reqId: int, start: str, end: str) -> None:  # noqa: N802
+        """IB callback signalling completion of historical bars stream."""
+        pending = self._pending_historical_requests.get(reqId)
+        if pending is not None:
+            pending.completed.set()
+        _ = (start, end)
+
+    def tickPrice(  # noqa: N802
+        self,
+        reqId: int,
+        tickType: int,
+        price: float,
+        attrib: Any,
+    ) -> None:
+        """IB callback for quote price ticks."""
+        if price <= 0:
+            return
+        field_map: dict[int, dict[str, Decimal]] = {
+            1: {"bid": Decimal(str(price))},
+            2: {"ask": Decimal(str(price))},
+            4: {"last": Decimal(str(price))},
+            6: {"day_high": Decimal(str(price))},
+            7: {"day_low": Decimal(str(price))},
+            9: {"close": Decimal(str(price))},
+        }
+        values = field_map.get(tickType)
+        if values is None:
+            return
+        self._emit_quote_update(req_id=reqId, values=values)
+        _ = attrib
+
+    def tickSize(  # noqa: N802
+        self,
+        reqId: int,
+        tickType: int,
+        size: int,
+    ) -> None:
+        """IB callback for quote size ticks."""
+        if tickType == 8 and size >= 0:
+            self._emit_quote_update(req_id=reqId, values={"volume": size})
+
+    def tickString(  # noqa: N802
+        self,
+        reqId: int,
+        tickType: int,
+        value: str,
+    ) -> None:
+        """IB callback for text ticks (used for RT volume)."""
+        if tickType != 48:
+            return
+        parsed = self._parse_rt_volume_total(value)
+        if parsed is not None:
+            self._emit_quote_update(req_id=reqId, values={"volume": parsed})
+
+    def marketDataType(self, reqId: int, marketDataType: int) -> None:  # noqa: N802
+        """IB callback indicating whether market data is live/frozen/delayed."""
+        delayed = marketDataType in {3, 4}
+        self._quote_delayed_by_request_id[reqId] = delayed
+        self._emit_quote_update(req_id=reqId, values={"delayed": delayed})
 
     def openOrder(  # noqa: N802
         self,
@@ -378,6 +552,125 @@ class IbApiGateway(EWrapper, EClient):  # type: ignore[misc]
             clientId,
             whyHeld,
             mktCapPrice,
+        )
+
+    def _request_historical_bars(
+        self,
+        *,
+        contract: ContractRef,
+        sessions: int,
+        bar_size: str,
+    ) -> list[MarketBar]:
+        if not self.is_connected():
+            raise BrokerConnectivityError("IB API not connected.")
+        if sessions <= 0:
+            raise ValueError("sessions must be positive")
+        normalized_size = bar_size.strip()
+        if not normalized_size:
+            raise ValueError("bar_size cannot be empty")
+
+        request_id = self._reserve_request_id()
+        pending = _PendingHistoricalData()
+        self._pending_historical_requests[request_id] = pending
+        self._bar_subscription_symbols[request_id] = contract.symbol.upper()
+
+        ib_contract = self._to_ib_contract(contract)
+        super().reqHistoricalData(
+            request_id,
+            ib_contract,
+            "",
+            f"{sessions} D",
+            normalized_size,
+            "TRADES",
+            1,
+            1,
+            False,
+            [],
+        )
+
+        if not pending.completed.wait(timeout=self._request_timeout_seconds):
+            self._pending_historical_requests.pop(request_id, None)
+            self._bar_subscription_symbols.pop(request_id, None)
+            raise BrokerConnectivityError(
+                f"Historical data timed out for symbol={contract.symbol} request_id={request_id}."
+            )
+
+        self._pending_historical_requests.pop(request_id, None)
+        self._bar_subscription_symbols.pop(request_id, None)
+        if pending.error_message is not None and not pending.bars:
+            raise BrokerConnectivityError(pending.error_message)
+        return pending.bars
+
+    def _emit_quote_update(self, *, req_id: int, values: dict[str, object]) -> None:
+        contract = self._quote_request_to_contract.get(req_id)
+        if contract is None:
+            return
+
+        quote = MarketQuote(
+            symbol=contract.symbol.upper(),
+            sec_type=contract.sec_type.upper(),
+            exchange=contract.exchange.upper(),
+            currency=contract.currency.upper(),
+            con_id=contract.con_id if contract.con_id > 0 else None,
+            primary_exchange=(contract.primary_exchange.upper() if contract.primary_exchange else None),
+            bid=values.get("bid") if isinstance(values.get("bid"), Decimal) else None,
+            ask=values.get("ask") if isinstance(values.get("ask"), Decimal) else None,
+            last=values.get("last") if isinstance(values.get("last"), Decimal) else None,
+            close=values.get("close") if isinstance(values.get("close"), Decimal) else None,
+            day_high=values.get("day_high") if isinstance(values.get("day_high"), Decimal) else None,
+            day_low=values.get("day_low") if isinstance(values.get("day_low"), Decimal) else None,
+            volume=values.get("volume") if isinstance(values.get("volume"), int) else None,
+            delayed=(
+                bool(values.get("delayed"))
+                if "delayed" in values
+                else self._quote_delayed_by_request_id.get(req_id, False)
+            ),
+            updated_at=datetime.now(tz=UTC),
+        )
+
+        for handler in self._quote_handlers:
+            handler(quote)
+
+    def _pending_historical_symbol(self, request_id: int) -> str:
+        symbol = self._bar_subscription_symbols.get(request_id)
+        if symbol is None:
+            return "UNKNOWN"
+        return symbol
+
+    @staticmethod
+    def _parse_historical_bar_timestamp(value: str) -> datetime:
+        stripped = value.strip()
+        if re.fullmatch(r"\\d{8}", stripped):
+            return datetime.strptime(stripped, "%Y%m%d").replace(tzinfo=UTC)  # noqa: DTZ007
+        if re.fullmatch(r"\\d{8}  \\d{2}:\\d{2}:\\d{2}", stripped):
+            return datetime.strptime(stripped, "%Y%m%d  %H:%M:%S").replace(tzinfo=UTC)  # noqa: DTZ007
+        if re.fullmatch(r"\\d{8}-\\d{2}:\\d{2}:\\d{2}", stripped):
+            return datetime.strptime(stripped, "%Y%m%d-%H:%M:%S").replace(tzinfo=UTC)  # noqa: DTZ007
+        return datetime.now(tz=UTC)
+
+    @staticmethod
+    def _parse_rt_volume_total(value: str) -> int | None:
+        parts = value.split(";")
+        if len(parts) < 4:
+            return None
+        try:
+            return int(float(parts[3]))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _contract_key(contract: ContractRef) -> str:
+        con_id_part = str(contract.con_id) if contract.con_id > 0 else "0"
+        primary_exchange = contract.primary_exchange or ""
+        return "|".join(
+            [
+                contract.symbol.upper(),
+                contract.sec_type.upper(),
+                contract.exchange.upper(),
+                contract.currency.upper(),
+                primary_exchange.upper(),
+                con_id_part,
+            ]
         )
 
     def _start_reader_thread(self) -> None:

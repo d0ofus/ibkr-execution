@@ -13,6 +13,7 @@ from app.config import Settings
 from app.domain.enums import EnvironmentMode, Side
 from app.domain.errors import ContractNotFoundError, PinnedContractRequiredError
 from app.domain.models import ContractRef, OrderIntent, PinnedContract, utc_now
+from app.execution.orb_runner import OrbParameters, OrbRowState
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,145 @@ class FakeOrderManager:
         return sorted(self.trades.keys())
 
 
+@dataclass
+class FakeBrokerClient:
+    connected: bool = True
+    profile_switches: list[tuple[str, int, int]] = field(default_factory=list)
+
+    def is_connected(self) -> bool:
+        return self.connected
+
+    def switch_connection_profile(self, *, host: str, port: int, client_id: int) -> None:
+        self.profile_switches.append((host, port, client_id))
+        self.connected = True
+
+
+@dataclass
+class FakeWorkspaceSettings:
+    user_key: str
+    environment: EnvironmentMode
+    settings_json: str
+
+
+@dataclass
+class FakeWorkspaceSettingsRepo:
+    items: dict[tuple[str, EnvironmentMode], FakeWorkspaceSettings] = field(default_factory=dict)
+
+    def get(self, *, user_key: str, environment: EnvironmentMode) -> FakeWorkspaceSettings | None:
+        return self.items.get((user_key, environment))
+
+    def upsert(self, *, user_key: str, environment: EnvironmentMode, settings_json: str) -> FakeWorkspaceSettings:
+        item = FakeWorkspaceSettings(user_key=user_key, environment=environment, settings_json=settings_json)
+        self.items[(user_key, environment)] = item
+        return item
+
+
+@dataclass
+class FakeMarketDataService:
+    rows: list[dict[str, str]] = field(default_factory=list)
+    columns: list[str] = field(default_factory=lambda: ["last", "bid"])
+
+    def ensure_workspace(self, workspace_key: str) -> None:
+        _ = workspace_key
+
+    def get_rows(self, workspace_key: str):  # type: ignore[no-untyped-def]
+        _ = workspace_key
+        return [
+            type(
+                "Row",
+                (),
+                {
+                    "row_id": row["row_id"],
+                    "symbol": row["symbol"],
+                    "sec_type": row["sec_type"],
+                    "exchange": row["exchange"],
+                    "currency": row["currency"],
+                    "con_id": None,
+                    "primary_exchange": None,
+                },
+            )()
+            for row in self.rows
+        ]
+
+    def set_rows(self, workspace_key: str, rows):  # type: ignore[no-untyped-def]
+        _ = workspace_key
+        self.rows = [
+            {
+                "row_id": row.row_id,
+                "symbol": row.symbol,
+                "sec_type": row.sec_type,
+                "exchange": row.exchange,
+                "currency": row.currency,
+            }
+            for row in rows
+        ]
+        return rows
+
+    def delete_row(self, workspace_key: str, row_id: str) -> bool:
+        _ = workspace_key
+        before = len(self.rows)
+        self.rows = [row for row in self.rows if row["row_id"] != row_id]
+        return len(self.rows) < before
+
+    def get_columns(self, workspace_key: str) -> list[str]:
+        _ = workspace_key
+        return list(self.columns)
+
+    def set_columns(self, workspace_key: str, columns: list[str]) -> list[str]:
+        _ = workspace_key
+        self.columns = list(columns)
+        return list(self.columns)
+
+    def is_connected(self) -> bool:
+        return True
+
+    def is_feed_healthy(self) -> bool:
+        return True
+
+    def register_session(self, *, session_id: str, workspace_key: str):  # type: ignore[no-untyped-def]
+        _ = (session_id, workspace_key)
+        raise RuntimeError("not used in this test")
+
+    def unregister_session(self, session_id: str) -> None:
+        _ = session_id
+
+
+@dataclass
+class FakeOrbRunner:
+    items: list[OrbRowState] = field(default_factory=list)
+
+    def start(self, *, workspace_key: str, row_ids: list[str], params: OrbParameters) -> list[OrbRowState]:
+        _ = (workspace_key, params)
+        self.items = [
+            OrbRowState(
+                workspace_key=workspace_key,
+                row_id=row_id,
+                symbol="AAPL",
+                qty=params.qty,
+                x1=params.x1,
+                x2=params.x2,
+                state="ARMED",
+            )
+            for row_id in row_ids
+        ]
+        return self.items
+
+    def stop(self, *, workspace_key: str, row_ids: list[str], stop_all: bool) -> list[OrbRowState]:
+        _ = workspace_key
+        if stop_all:
+            for item in self.items:
+                item.state = "IDLE"
+            return self.items
+        for item in self.items:
+            if item.row_id in row_ids:
+                item.state = "IDLE"
+        return self.items
+
+    def list_status(self, *, workspace_key: str) -> list[OrbRowState]:
+        _ = workspace_key
+        return self.items
+
+
 def _build_client(*, live_trading: bool = False, ack: str = "", dry_run: bool = False) -> tuple[TestClient, FakeContractService, FakeOrderManager]:
     settings = Settings(
         live_trading=live_trading,
@@ -116,6 +256,16 @@ def _build_client(*, live_trading: bool = False, ack: str = "", dry_run: bool = 
     app.dependency_overrides[get_pinned_contract_reader] = lambda: contract_service
     app.dependency_overrides[get_order_manager] = lambda: order_manager
 
+    workspace_repo = FakeWorkspaceSettingsRepo()
+    app.state.workspace_settings_repository = workspace_repo
+    app.state.market_data_service = FakeMarketDataService()
+    app.state.orb_runner = FakeOrbRunner()
+    app.state.broker_client = FakeBrokerClient()
+    app.state.broker_profiles = {
+        EnvironmentMode.PAPER: type("Profile", (), {"host": "127.0.0.1", "port": 4002, "client_id": 1, "account": "DU123456"})(),
+        EnvironmentMode.LIVE: type("Profile", (), {"host": "127.0.0.1", "port": 4001, "client_id": 2, "account": "U123456"})(),
+    }
+
     return TestClient(app), contract_service, order_manager
 
 
@@ -129,6 +279,10 @@ def test_health_and_status_endpoints() -> None:
     ui_page = client.get("/ui")
     assert ui_page.status_code == 200
     assert "Quick Submit" in ui_page.text
+
+    strategy_list_page = client.get("/strategy-list")
+    assert strategy_list_page.status_code == 200
+    assert "Strategy List" in strategy_list_page.text
 
     health = client.get("/health")
     assert health.status_code == 200
@@ -315,3 +469,63 @@ def test_orders_intent_rejected_when_dry_run_enabled() -> None:
     payload = response.json()
     assert payload["accepted"] is False
     assert "dry_run" in payload["reason"]
+
+
+def test_workspace_and_orb_routes() -> None:
+    client, _, _ = _build_client()
+
+    state = client.get("/workspace/state")
+    assert state.status_code == 200
+    assert state.json()["workspace_key"].endswith(":paper")
+
+    updated_rows = client.put(
+        "/workspace/rows",
+        json={
+            "rows": [
+                {
+                    "row_id": "row-1",
+                    "symbol": "AAPL",
+                    "sec_type": "STK",
+                    "exchange": "SMART",
+                    "currency": "USD",
+                }
+            ]
+        },
+    )
+    assert updated_rows.status_code == 200
+    assert len(updated_rows.json()["rows"]) == 1
+
+    updated_columns = client.put("/workspace/columns", json={"columns": ["last", "ask"]})
+    assert updated_columns.status_code == 200
+    assert updated_columns.json()["columns"] == ["last", "ask"]
+
+    started = client.post(
+        "/execution/orb/start",
+        json={"row_ids": ["row-1"], "params": {"qty": 90, "x1": "101.00", "x2": "102.00"}},
+    )
+    assert started.status_code == 200
+    assert started.json()["items"][0]["state"] == "ARMED"
+
+    status_resp = client.get("/execution/orb/status")
+    assert status_resp.status_code == 200
+    assert len(status_resp.json()["items"]) == 1
+
+    stopped = client.post("/execution/orb/stop", json={"row_ids": ["row-1"], "stop_all": False})
+    assert stopped.status_code == 200
+    assert stopped.json()["items"][0]["state"] == "IDLE"
+
+
+def test_runtime_readiness_and_profile_switch_routes() -> None:
+    client, _, _ = _build_client(live_trading=True, ack="I_UNDERSTAND", dry_run=False)
+
+    readiness = client.get("/runtime/readiness")
+    assert readiness.status_code == 200
+    payload = readiness.json()
+    assert payload["selected_profile"] == "paper"
+    assert payload["paper_profile"]["port"] == 4002
+    assert payload["live_profile"]["port"] == 4001
+
+    switched = client.put("/runtime/profile", json={"profile": "live"})
+    assert switched.status_code == 200
+    switched_payload = switched.json()
+    assert switched_payload["selected_profile"] == "live"

@@ -13,8 +13,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.enums import EnvironmentMode, Side, TradeState
 from app.domain.errors import DuplicateRecordError, PersistenceError
-from app.domain.models import AuditLogEvent, OrderIntent, PinnedContract, TradeRecord, utc_now
-from app.persistence.db import AuditLogOrm, PinnedContractOrm, TradeOrm
+from app.domain.models import (
+    AuditLogEvent,
+    OrderIntent,
+    PinnedContract,
+    TradeRecord,
+    WorkspaceSettings,
+    utc_now,
+)
+from app.persistence.db import AuditLogOrm, PinnedContractOrm, TradeOrm, WorkspaceSettingsOrm
 
 
 def _serialize_payload(payload: dict[str, object]) -> tuple[str, str]:
@@ -315,4 +322,63 @@ class SqlAlchemyAuditLogRepository(RepositoryBase):
             payload=payload,
             payload_hash=row.payload_hash,
             created_at=row.created_at,
+        )
+
+
+class SqlAlchemyWorkspaceSettingsRepository(RepositoryBase):
+    """Repository for persisted workspace settings keyed by user/environment."""
+
+    def get(self, *, user_key: str, environment: EnvironmentMode) -> WorkspaceSettings | None:
+        """Return workspace settings for a specific user/environment pair."""
+        with self._session_scope() as session:
+            row = session.scalar(
+                select(WorkspaceSettingsOrm).where(
+                    WorkspaceSettingsOrm.user_key == user_key,
+                    WorkspaceSettingsOrm.environment == environment.value,
+                )
+            )
+            if row is None:
+                return None
+            return self._to_model(row)
+
+    def upsert(
+        self,
+        *,
+        user_key: str,
+        environment: EnvironmentMode,
+        settings_json: str,
+    ) -> WorkspaceSettings:
+        """Create or update workspace settings for user/environment."""
+        with self._session_scope() as session:
+            row = session.scalar(
+                select(WorkspaceSettingsOrm).where(
+                    WorkspaceSettingsOrm.user_key == user_key,
+                    WorkspaceSettingsOrm.environment == environment.value,
+                )
+            )
+            now = utc_now()
+            if row is None:
+                row = WorkspaceSettingsOrm(
+                    user_key=user_key,
+                    environment=environment.value,
+                    settings_json=settings_json,
+                    updated_at=now,
+                )
+                session.add(row)
+            else:
+                row.settings_json = settings_json
+                row.updated_at = now
+                session.add(row)
+            session.flush()
+            session.refresh(row)
+            return self._to_model(row)
+
+    @staticmethod
+    def _to_model(row: WorkspaceSettingsOrm) -> WorkspaceSettings:
+        return WorkspaceSettings(
+            id=row.id,
+            user_key=row.user_key,
+            environment=EnvironmentMode(row.environment),
+            settings_json=row.settings_json,
+            updated_at=row.updated_at,
         )

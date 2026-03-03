@@ -1,0 +1,1017 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IBKR Workspace</title>
+  <style>
+    :root {
+      --bg: #eef3f8;
+      --panel: #ffffff;
+      --text: #0f2034;
+      --muted: #5f7083;
+      --accent: #0b6db7;
+      --ok: #0a7a32;
+      --warn: #8a4f00;
+      --err: #b31d1d;
+      --border: #d5dfe8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top left, #f6fbff 0%, var(--bg) 45%, #ebf0f5 100%);
+    }
+    .wrap {
+      width: calc(100vw - 24px);
+      max-width: none;
+      margin: 12px auto;
+      padding: 0 6px 12px;
+      display: grid;
+      grid-template-columns: 3fr 1.2fr;
+      gap: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 1px 3px rgba(10, 30, 50, 0.08);
+    }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    h2 { margin: 0 0 8px; font-size: 17px; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 13px; }
+    .top {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .status-dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 10px;
+    }
+    .status-dot i {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      background: #9aa7b5;
+    }
+    .status-dot.ok i { background: var(--ok); }
+    .status-dot.warn i { background: var(--warn); }
+    .status-dot.err i { background: var(--err); }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    label { font-size: 11px; color: var(--muted); }
+    input, select, button, textarea {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      font-size: 13px;
+      padding: 6px 8px;
+      min-height: 34px;
+      color: var(--text);
+      background: #fff;
+    }
+    button {
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary { background: #566b84; }
+    button.warn { background: var(--warn); }
+    button.danger { background: var(--err); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      table-layout: auto;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 6px;
+      min-width: 90px;
+      white-space: normal;
+      word-break: break-word;
+    }
+    th { color: var(--muted); font-weight: 600; background: #f9fbfd; position: sticky; top: 0; }
+    .grid-wrap { max-height: 580px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .grid-wrap table th:nth-child(1), .grid-wrap table td:nth-child(1) { min-width: 52px; }
+    .grid-wrap table th:nth-child(2), .grid-wrap table td:nth-child(2) { min-width: 160px; }
+    .grid-wrap table th:nth-child(3), .grid-wrap table td:nth-child(3) { min-width: 90px; }
+    .grid-wrap table th:nth-child(4), .grid-wrap table td:nth-child(4) { min-width: 80px; }
+    .grid-wrap table th:nth-child(5), .grid-wrap table td:nth-child(5) { min-width: 100px; }
+    .grid-wrap table th:nth-child(6), .grid-wrap table td:nth-child(6) { min-width: 80px; }
+    .grid-wrap table th:nth-child(7), .grid-wrap table td:nth-child(7) { min-width: 140px; }
+    .logs {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfdff;
+      padding: 8px;
+      font-size: 12px;
+      max-height: 250px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .small { font-size: 12px; color: var(--muted); }
+    .columns-list {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 220px;
+      overflow: auto;
+      padding: 8px;
+      display: grid;
+      gap: 4px;
+    }
+    .columns-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 12px;
+    }
+    .columns-item .name { flex: 1; }
+    .banner {
+      margin: 6px 0 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      border: 1px solid transparent;
+      display: none;
+    }
+    .banner.show { display: block; }
+    .banner.info { background: #eef6ff; border-color: #c8ddf4; color: #1a4d78; }
+    .banner.ok { background: #edf9f0; border-color: #c6e9cd; color: #146630; }
+    .banner.warn { background: #fff4e8; border-color: #efd2b4; color: #7a480f; }
+    .banner.err { background: #ffefef; border-color: #f0c7c7; color: #8f2020; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid transparent;
+      text-transform: lowercase;
+      letter-spacing: 0.1px;
+    }
+    .badge.idle { background: #eef2f6; border-color: #d3dce6; color: #3f556b; }
+    .badge.armed { background: #e9f3ff; border-color: #c1daf3; color: #1d557d; }
+    .badge.entry_submitted, .badge.entered { background: #edf9f0; border-color: #c7e8cd; color: #1a6333; }
+    .badge.stop_moved_be { background: #eff7ff; border-color: #cde0f2; color: #28567f; }
+    .badge.partial_tp_done, .badge.completed { background: #f4f8ea; border-color: #dbe8bf; color: #51671e; }
+    .badge.paused_stale { background: #fff4e6; border-color: #f0d4a9; color: #7c4f14; }
+    .badge.error { background: #ffefef; border-color: #efc5c5; color: #8a2020; }
+    @media (max-width: 1100px) {
+      .wrap { grid-template-columns: 1fr; }
+      .row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card top">
+      <div>
+        <h1>Market Data + Order Entry Workspace</h1>
+        <p class="subtitle">Live IBKR feed and strategy execution panel.</p>
+        <p class="subtitle" id="runtimeSummary">mode=paper account=(unset) live_armed=false</p>
+      </div>
+      <div>
+        <span id="connStatus" class="status-dot"><i></i>Broker</span>
+        <span id="feedStatus" class="status-dot"><i></i>Feed</span>
+        <button id="refreshRuntimeBtn" class="secondary" style="margin-left:10px;">Refresh Runtime</button>
+        <button id="armLiveBtn" class="warn" style="margin-left:4px;">Arm Live</button>
+        <button id="strategyListBtn" class="secondary" style="margin-left:4px;">Strategy List</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Instrument Grid</h2>
+      <div class="row">
+        <div class="field"><label>Ticker</label><input id="rowSymbol" value="AAPL"></div>
+        <div class="field"><label>Type</label><input id="rowType" value="STK"></div>
+        <div class="field"><label>Exchange</label><input id="rowExchange" value="SMART"></div>
+        <div class="field"><label>Currency</label><input id="rowCurrency" value="USD"></div>
+        <div class="field"><label>&nbsp;</label><button id="addRowBtn">Add Row</button></div>
+      </div>
+      <div id="gridBanner" class="banner"></div>
+
+      <div class="grid-wrap">
+        <table>
+          <thead>
+            <tr id="gridHead"></tr>
+          </thead>
+          <tbody id="gridBody"></tbody>
+        </table>
+      </div>
+      <p class="small">Select rows via checkbox to run ORB in the execution panel.</p>
+    </section>
+
+    <section class="card">
+      <h2>Live Readiness</h2>
+      <div class="row" style="grid-template-columns: 1.2fr 1fr 1fr;">
+        <div class="field">
+          <label>Broker Profile</label>
+          <select id="profileSelect">
+            <option value="paper">paper</option>
+            <option value="live">live</option>
+          </select>
+        </div>
+        <div class="field"><label>&nbsp;</label><button id="switchProfileBtn" class="secondary">Switch Profile</button></div>
+        <div class="field"><label>&nbsp;</label><button id="refreshReadinessBtn" class="secondary">Refresh Readiness</button></div>
+      </div>
+      <div id="readinessBanner" class="banner"></div>
+      <div id="readinessSummary" class="logs" style="max-height:180px;">Readiness not loaded.</div>
+      <div style="margin-top:8px;">
+        <strong style="font-size:12px;">Connection Instructions</strong>
+        <div id="profileInstructions" class="logs" style="max-height:180px;"></div>
+      </div>
+
+      <h2 style="margin-top:14px;">Execution Panel</h2>
+      <div class="row" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+        <div class="field"><label>Qty</label><input id="orbQty" value="90"></div>
+        <div class="field"><label>X1 (absolute price)</label><input id="orbX1" value="205.00"></div>
+        <div class="field"><label>X2 (absolute price)</label><input id="orbX2" value="207.00"></div>
+      </div>
+      <div class="btns">
+        <button id="orbStartBtn">Start ORB (Selected)</button>
+        <button id="orbStopSelectedBtn" class="secondary">Stop ORB (Selected)</button>
+        <button id="orbStopAllBtn" class="danger">Stop ORB (All)</button>
+        <button id="orbStatusBtn" class="secondary">Refresh ORB Status</button>
+      </div>
+      <div id="orbBanner" class="banner"></div>
+      <div id="orbStatusLog" class="logs" style="margin-top:8px;">No ORB events yet.</div>
+
+      <h2 style="margin-top:14px;">Columns</h2>
+      <div class="columns-list" id="columnsList"></div>
+      <div class="btns" style="margin-top:8px;">
+        <button id="saveColumnsBtn" class="secondary">Save Columns</button>
+      </div>
+
+      <h2 style="margin-top:14px;">System Log</h2>
+      <div id="systemLog" class="logs">Idle.</div>
+    </section>
+  </div>
+
+  <script>
+    const baseColumns = [
+      "volume",
+      "avg_volume",
+      "avg_volume_at_time",
+      "last",
+      "day_high",
+      "day_low",
+      "prev_day_low",
+      "close",
+      "change_pct",
+      "bid",
+      "ask",
+      "ask_below_high_pct"
+    ];
+
+    const state = {
+      workspaceKey: "",
+      rows: [],
+      rowData: {},
+      orbByRow: {},
+      columns: [...baseColumns],
+      selected: new Set(),
+      ws: null,
+      sse: null,
+      streamMode: "none",
+      connected: false,
+      feedHealthy: false,
+      readiness: null
+    };
+
+    const gridHead = document.getElementById("gridHead");
+    const gridBody = document.getElementById("gridBody");
+    const systemLog = document.getElementById("systemLog");
+    const orbLog = document.getElementById("orbStatusLog");
+    const gridBanner = document.getElementById("gridBanner");
+    const orbBanner = document.getElementById("orbBanner");
+    const readinessBanner = document.getElementById("readinessBanner");
+    const readinessSummary = document.getElementById("readinessSummary");
+    const profileInstructions = document.getElementById("profileInstructions");
+    const runtimeSummary = document.getElementById("runtimeSummary");
+
+    function log(el, message) {
+      const line = `[${new Date().toLocaleTimeString()}] ${message}`;
+      el.textContent = `${line}\n${el.textContent}`.slice(0, 8000);
+    }
+
+    function fmt(value) {
+      if (value === null || value === undefined) return "-";
+      return String(value);
+    }
+
+    function parseErrorMessage(err) {
+      const message = err && err.message ? String(err.message) : String(err || "unknown error");
+      const idx = message.indexOf(": {");
+      if (idx > 0) {
+        try {
+          const parsed = JSON.parse(message.slice(idx + 2));
+          if (parsed && typeof parsed.detail === "string") return parsed.detail;
+        } catch {}
+      }
+      return message;
+    }
+
+    function showBanner(el, kind, message) {
+      el.className = `banner ${kind} show`;
+      el.textContent = message;
+    }
+
+    function clearBanner(el) {
+      el.className = "banner";
+      el.textContent = "";
+    }
+
+    function orbBadgeClass(rawState) {
+      const normalized = String(rawState || "idle").toLowerCase();
+      if (normalized === "stop_moved_be") return "stop_moved_be";
+      if (normalized === "partial_tp_done") return "partial_tp_done";
+      if (normalized === "entry_submitted") return "entry_submitted";
+      if (normalized === "paused_stale") return "paused_stale";
+      if (normalized === "entered") return "entered";
+      if (normalized === "completed") return "completed";
+      if (normalized === "armed") return "armed";
+      if (normalized === "error") return "error";
+      return "idle";
+    }
+
+    function setOrbState(rowId, payload) {
+      state.orbByRow[rowId] = {
+        state: String(payload.state || "idle"),
+        detail: payload.detail || null,
+        trade_id: payload.trade_id || null
+      };
+    }
+
+    function applyOrbItems(items) {
+      if (!Array.isArray(items)) return;
+      for (const item of items) {
+        if (!item || !item.row_id) continue;
+        setOrbState(item.row_id, item);
+      }
+      renderGrid();
+    }
+
+    function selectedRowIds() {
+      return [...state.selected];
+    }
+
+    function validateRowInput({ symbol, secType, exchange, currency }) {
+      if (!symbol) return "Ticker is required.";
+      if (!/^[A-Z0-9._-]+$/.test(symbol)) return "Ticker contains invalid characters.";
+      if (!secType) return "Type is required.";
+      if (!exchange) return "Exchange is required.";
+      if (!currency) return "Currency is required.";
+      return null;
+    }
+
+    function validateOrbParams() {
+      const qty = Number(document.getElementById("orbQty").value);
+      const x1 = Number(document.getElementById("orbX1").value);
+      const x2 = Number(document.getElementById("orbX2").value);
+      if (!Number.isInteger(qty) || qty <= 0) return { error: "Qty must be a positive integer." };
+      if (!Number.isFinite(x1) || x1 <= 0) return { error: "X1 must be a positive price." };
+      if (!Number.isFinite(x2) || x2 <= 0) return { error: "X2 must be a positive price." };
+      if (x2 <= x1) return { error: "X2 must be greater than X1." };
+      return { qty, x1, x2 };
+    }
+
+    async function api(path, method = "GET", body = null) {
+      const options = { method, headers: { "Content-Type": "application/json" } };
+      if (body !== null) options.body = JSON.stringify(body);
+      const res = await fetch(path, options);
+      const text = await res.text();
+      let data = {};
+      if (text) {
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      }
+      if (!res.ok) throw new Error(`${res.status}: ${JSON.stringify(data)}`);
+      return data;
+    }
+
+    async function refreshRuntimeStatus() {
+      try {
+        const status = await api("/status");
+        runtimeSummary.textContent = `mode=${status.mode} account=${status.account || "(unset)"} live_armed=${status.live_armed} dry_run=${status.dry_run} kill_switch=${status.kill_switch}`;
+        if (status.mode === "live") {
+          showBanner(gridBanner, "warn", "Live mode armed. Orders can transmit to live account.");
+        }
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(gridBanner, "err", detail);
+        log(systemLog, `Runtime status failed: ${detail}`);
+      }
+    }
+
+    function instructionsForProfile(profile, readiness) {
+      const paper = readiness ? readiness.paper_profile : null;
+      const live = readiness ? readiness.live_profile : null;
+      if (profile === "live") {
+        const host = live ? live.host : "127.0.0.1";
+        const port = live ? live.port : "-";
+        const clientId = live ? live.client_id : "-";
+        const account = live ? (live.account || "(set IBKR_LIVE_ACCOUNT or IBKR_ACCOUNT)") : "(unknown)";
+        return [
+          `1) Open IB Gateway/TWS LIVE login.`,
+          `2) API settings: host=${host}, port=${port}, client_id=${clientId}.`,
+          `3) Confirm account mapping in app profile: ${account}.`,
+          `4) In this UI: Switch profile=live, then click Arm Live.`,
+          `5) Keep order size minimal for first connectivity test.`
+        ].join("\n");
+      }
+      const host = paper ? paper.host : "127.0.0.1";
+      const port = paper ? paper.port : "-";
+      const clientId = paper ? paper.client_id : "-";
+      const account = paper ? (paper.account || "(set IBKR_PAPER_ACCOUNT or IBKR_ACCOUNT)") : "(unknown)";
+      return [
+        `1) Open IB Gateway/TWS PAPER login.`,
+        `2) API settings: host=${host}, port=${port}, client_id=${clientId}.`,
+        `3) Confirm account mapping in app profile: ${account}.`,
+        `4) In this UI: Switch profile=paper.`,
+        `5) Keep LIVE arming off for paper testing.`
+      ].join("\n");
+    }
+
+    function renderReadiness(readiness) {
+      state.readiness = readiness;
+      const profile = readiness.selected_profile || "paper";
+      document.getElementById("profileSelect").value = profile;
+      const lines = [
+        `selected_profile=${readiness.selected_profile}`,
+        `broker_connected=${readiness.broker_connected}`,
+        `current_mode=${readiness.current_mode}`,
+        `live_armed=${readiness.live_armed}`,
+        `live_trading_enabled=${readiness.live_trading_enabled}`,
+        `ack_configured=${readiness.ack_configured}`,
+        `dry_run=${readiness.dry_run}`,
+        `kill_switch=${readiness.kill_switch}`,
+        "",
+        "Guidance:",
+        ...readiness.guidance.map((g) => `- ${g}`)
+      ];
+      readinessSummary.textContent = lines.join("\n");
+      profileInstructions.textContent = instructionsForProfile(profile, readiness);
+
+      if (readiness.broker_connected && readiness.selected_profile === "paper") {
+        showBanner(readinessBanner, "ok", "Paper profile connected.");
+      } else if (readiness.broker_connected && readiness.selected_profile === "live") {
+        showBanner(readinessBanner, "warn", "Live profile connected. Confirm arming/gates before orders.");
+      } else {
+        showBanner(readinessBanner, "warn", "Broker not connected for selected profile.");
+      }
+    }
+
+    async function refreshReadiness() {
+      try {
+        const readiness = await api("/runtime/readiness");
+        renderReadiness(readiness);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(readinessBanner, "err", detail);
+        log(systemLog, `Readiness check failed: ${detail}`);
+      }
+    }
+
+    async function switchProfile() {
+      const profile = document.getElementById("profileSelect").value;
+      try {
+        const readiness = await api("/runtime/profile", "PUT", { profile });
+        renderReadiness(readiness);
+        await refreshRuntimeStatus();
+        showBanner(readinessBanner, profile === "live" ? "warn" : "ok", `Switched to ${profile} profile.`);
+        log(systemLog, `Switched broker profile to ${profile}.`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(readinessBanner, "err", detail);
+        log(systemLog, `Profile switch failed: ${detail}`);
+      }
+    }
+
+    async function armLive() {
+      try {
+        const response = await api("/arm_live", "POST");
+        showBanner(gridBanner, "warn", `Live armed: mode=${response.mode}`);
+        log(systemLog, `Live armed in mode=${response.mode}`);
+        await refreshRuntimeStatus();
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(gridBanner, "err", detail);
+        log(systemLog, `Arm live failed: ${detail}`);
+      }
+    }
+
+    function renderStatus() {
+      const conn = document.getElementById("connStatus");
+      const feed = document.getElementById("feedStatus");
+
+      conn.className = `status-dot ${state.connected ? "ok" : "err"}`;
+      conn.innerHTML = `<i></i>Broker: ${state.connected ? "connected" : "down"}`;
+
+      const feedClass = state.feedHealthy ? "ok" : (state.connected ? "warn" : "err");
+      feed.className = `status-dot ${feedClass}`;
+      feed.innerHTML = `<i></i>Feed: ${state.feedHealthy ? "healthy" : "stale"}`;
+    }
+
+    function renderColumnsEditor() {
+      const list = document.getElementById("columnsList");
+      list.innerHTML = "";
+      const enabled = [...state.columns];
+      for (const name of baseColumns) {
+        const row = document.createElement("div");
+        row.className = "columns-item";
+
+        const left = document.createElement("div");
+        left.style.display = "flex";
+        left.style.alignItems = "center";
+        left.style.gap = "6px";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = enabled.includes(name);
+        cb.onchange = () => {
+          if (cb.checked && !state.columns.includes(name)) {
+            state.columns.push(name);
+          }
+          if (!cb.checked) {
+            state.columns = state.columns.filter((item) => item !== name);
+          }
+          renderGrid();
+          renderColumnsEditor();
+        };
+
+        const label = document.createElement("span");
+        label.className = "name";
+        label.textContent = name;
+        left.appendChild(cb);
+        left.appendChild(label);
+
+        const actions = document.createElement("div");
+        actions.style.display = "flex";
+        actions.style.gap = "4px";
+
+        const up = document.createElement("button");
+        up.textContent = "Up";
+        up.className = "secondary";
+        up.style.minHeight = "26px";
+        up.onclick = () => {
+          const idx = state.columns.indexOf(name);
+          if (idx > 0) {
+            const copy = [...state.columns];
+            [copy[idx - 1], copy[idx]] = [copy[idx], copy[idx - 1]];
+            state.columns = copy;
+            renderGrid();
+            renderColumnsEditor();
+          }
+        };
+
+        const down = document.createElement("button");
+        down.textContent = "Down";
+        down.className = "secondary";
+        down.style.minHeight = "26px";
+        down.onclick = () => {
+          const idx = state.columns.indexOf(name);
+          if (idx >= 0 && idx < state.columns.length - 1) {
+            const copy = [...state.columns];
+            [copy[idx], copy[idx + 1]] = [copy[idx + 1], copy[idx]];
+            state.columns = copy;
+            renderGrid();
+            renderColumnsEditor();
+          }
+        };
+
+        actions.appendChild(up);
+        actions.appendChild(down);
+
+        row.appendChild(left);
+        row.appendChild(actions);
+        list.appendChild(row);
+      }
+    }
+
+    function renderGrid() {
+      gridHead.innerHTML = "";
+      const head = ["select", "row_id", "symbol", "sec_type", "exchange", "currency", "orb_state", ...state.columns, "actions"];
+      for (const col of head) {
+        const th = document.createElement("th");
+        th.textContent = col;
+        gridHead.appendChild(th);
+      }
+
+      gridBody.innerHTML = "";
+      for (const row of state.rows) {
+        const tr = document.createElement("tr");
+        const snap = state.rowData[row.row_id] || row;
+
+        const checkTd = document.createElement("td");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = state.selected.has(row.row_id);
+        cb.onchange = () => {
+          if (cb.checked) state.selected.add(row.row_id);
+          else state.selected.delete(row.row_id);
+        };
+        checkTd.appendChild(cb);
+        tr.appendChild(checkTd);
+
+        tr.appendChild(cell(row.row_id));
+        tr.appendChild(cell(row.symbol));
+        tr.appendChild(cell(row.sec_type));
+        tr.appendChild(cell(row.exchange));
+        tr.appendChild(cell(row.currency));
+        const orbCell = document.createElement("td");
+        const orb = state.orbByRow[row.row_id] || { state: "idle", detail: null, trade_id: null };
+        const orbBadge = document.createElement("span");
+        const orbStateClass = orbBadgeClass(orb.state);
+        orbBadge.className = `badge ${orbStateClass}`;
+        orbBadge.textContent = orbStateClass;
+        if (orb.detail || orb.trade_id) {
+          orbBadge.title = `${orb.detail || ""}${orb.trade_id ? ` trade=${orb.trade_id}` : ""}`.trim();
+        }
+        orbCell.appendChild(orbBadge);
+        tr.appendChild(orbCell);
+
+        for (const col of state.columns) {
+          tr.appendChild(cell(fmt(snap[col])));
+        }
+
+        const actions = document.createElement("td");
+        const remove = document.createElement("button");
+        remove.textContent = "Remove";
+        remove.className = "danger";
+        remove.style.minHeight = "26px";
+        remove.onclick = async () => {
+          try {
+            await api(`/workspace/rows/${encodeURIComponent(row.row_id)}`, "DELETE");
+            state.selected.delete(row.row_id);
+            delete state.orbByRow[row.row_id];
+            await reloadWorkspace();
+            log(systemLog, `Row removed: ${row.row_id}`);
+          } catch (err) {
+            const detail = parseErrorMessage(err);
+            showBanner(gridBanner, "err", detail);
+            log(systemLog, `Row remove failed: ${detail}`);
+          }
+        };
+        actions.appendChild(remove);
+        tr.appendChild(actions);
+
+        gridBody.appendChild(tr);
+      }
+    }
+
+    function cell(value) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      return td;
+    }
+
+    async function reloadWorkspace() {
+      const data = await api("/workspace/state");
+      state.workspaceKey = data.workspace_key;
+      state.rows = data.rows || [];
+      state.columns = (data.columns && data.columns.length) ? data.columns : [...baseColumns];
+      state.connected = Boolean(data.connected);
+      state.feedHealthy = Boolean(data.feed_healthy);
+
+      for (const row of state.rows) {
+        if (!state.rowData[row.row_id]) state.rowData[row.row_id] = { ...row };
+      }
+      const validIds = new Set(state.rows.map((row) => row.row_id));
+      state.selected = new Set([...state.selected].filter((id) => validIds.has(id)));
+      for (const rowId of Object.keys(state.orbByRow)) {
+        if (!validIds.has(rowId)) delete state.orbByRow[rowId];
+      }
+
+      renderStatus();
+      renderColumnsEditor();
+      renderGrid();
+    }
+
+    async function saveRows() {
+      await api("/workspace/rows", "PUT", { rows: state.rows });
+    }
+
+    async function addRow() {
+      const symbol = document.getElementById("rowSymbol").value.trim().toUpperCase();
+      const secType = document.getElementById("rowType").value.trim().toUpperCase() || "STK";
+      const exchange = document.getElementById("rowExchange").value.trim().toUpperCase() || "SMART";
+      const currency = document.getElementById("rowCurrency").value.trim().toUpperCase() || "USD";
+      const validationError = validateRowInput({ symbol, secType, exchange, currency });
+      if (validationError) {
+        showBanner(gridBanner, "err", validationError);
+        log(systemLog, validationError);
+        return;
+      }
+      const duplicate = state.rows.find(
+        (row) => row.symbol === symbol && row.sec_type === secType && row.exchange === exchange && row.currency === currency
+      );
+      if (duplicate) {
+        showBanner(gridBanner, "warn", `Duplicate row already exists (${duplicate.row_id}).`);
+        return;
+      }
+      const rowId = `${symbol}-${Date.now()}`;
+      state.rows.push({ row_id: rowId, symbol, sec_type: secType, exchange, currency, con_id: null, primary_exchange: null });
+      state.rowData[rowId] = { row_id: rowId, symbol, sec_type: secType, exchange, currency };
+      try {
+        await saveRows();
+        await reloadWorkspace();
+        clearBanner(gridBanner);
+        showBanner(gridBanner, "ok", `Added row ${rowId}.`);
+        log(systemLog, `Row added: ${rowId}`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(gridBanner, "err", detail);
+        log(systemLog, `Add row failed: ${detail}`);
+      }
+    }
+
+    async function saveColumns() {
+      if (!state.columns.length) {
+        showBanner(gridBanner, "err", "At least one column must remain enabled.");
+        return;
+      }
+      try {
+        const response = await api("/workspace/columns", "PUT", { columns: state.columns });
+        state.columns = response.columns;
+        renderGrid();
+        renderColumnsEditor();
+        showBanner(gridBanner, "ok", "Columns saved.");
+        log(systemLog, "Columns saved.");
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(gridBanner, "err", detail);
+        log(systemLog, `Save columns failed: ${detail}`);
+      }
+    }
+
+    async function startOrb() {
+      const rowIds = selectedRowIds();
+      if (!rowIds.length) {
+        showBanner(orbBanner, "warn", "Select at least one row first.");
+        return;
+      }
+      const invalidRows = state.rows.filter(
+        (row) => rowIds.includes(row.row_id) && (row.sec_type !== "STK" || row.currency !== "USD")
+      );
+      if (invalidRows.length) {
+        showBanner(orbBanner, "err", "ORB execution supports STK/USD rows only.");
+        return;
+      }
+      if (!state.connected || !state.feedHealthy) {
+        showBanner(orbBanner, "warn", "Broker/feed not healthy. ORB start blocked until healthy.");
+        return;
+      }
+      const validated = validateOrbParams();
+      if (validated.error) {
+        showBanner(orbBanner, "err", validated.error);
+        return;
+      }
+      const payload = {
+        row_ids: rowIds,
+        params: {
+          qty: validated.qty,
+          x1: String(validated.x1),
+          x2: String(validated.x2)
+        }
+      };
+      try {
+        const result = await api("/execution/orb/start", "POST", payload);
+        applyOrbItems(result.items);
+        showBanner(orbBanner, "ok", "ORB started for selected rows.");
+        log(orbLog, `ORB started: ${JSON.stringify(result.items)}`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(orbBanner, "err", detail);
+        log(orbLog, `ORB start failed: ${detail}`);
+      }
+    }
+
+    async function stopOrbSelected() {
+      const rowIds = selectedRowIds();
+      if (!rowIds.length) {
+        showBanner(orbBanner, "warn", "Select rows to stop.");
+        return;
+      }
+      try {
+        const result = await api("/execution/orb/stop", "POST", { row_ids: rowIds, stop_all: false });
+        applyOrbItems(result.items);
+        showBanner(orbBanner, "info", "ORB stopped for selected rows.");
+        log(orbLog, `ORB stopped: ${JSON.stringify(result.items)}`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(orbBanner, "err", detail);
+        log(orbLog, `ORB stop failed: ${detail}`);
+      }
+    }
+
+    async function stopOrbAll() {
+      try {
+        const result = await api("/execution/orb/stop", "POST", { row_ids: [], stop_all: true });
+        applyOrbItems(result.items);
+        showBanner(orbBanner, "info", "ORB stopped for all rows.");
+        log(orbLog, `ORB all stopped: ${JSON.stringify(result.items)}`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(orbBanner, "err", detail);
+        log(orbLog, `ORB stop-all failed: ${detail}`);
+      }
+    }
+
+    async function refreshOrbStatus() {
+      try {
+        const result = await api("/execution/orb/status");
+        applyOrbItems(result.items);
+        clearBanner(orbBanner);
+        log(orbLog, `ORB status: ${JSON.stringify(result.items)}`);
+      } catch (err) {
+        const detail = parseErrorMessage(err);
+        showBanner(orbBanner, "err", detail);
+        log(orbLog, `ORB status failed: ${detail}`);
+      }
+    }
+
+    function connectWs() {
+      if (state.sse) {
+        try { state.sse.close(); } catch {}
+        state.sse = null;
+      }
+      if (state.ws) {
+        try { state.ws.close(); } catch {}
+      }
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/workspace`);
+      state.ws = ws;
+      state.streamMode = "websocket";
+
+      ws.onopen = () => {
+        showBanner(gridBanner, "info", "Streaming via WebSocket.");
+        log(systemLog, "Workspace websocket connected.");
+      };
+      ws.onclose = () => {
+        if (state.streamMode === "websocket") {
+          log(systemLog, "Workspace websocket closed; switching to SSE.");
+          connectSse();
+          return;
+        }
+        log(systemLog, "Workspace websocket closed.");
+      };
+      ws.onerror = () => {
+        log(systemLog, "Workspace websocket error.");
+      };
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleWsEvent(message);
+        } catch {
+          log(systemLog, "Failed to parse websocket event.");
+        }
+      };
+    }
+
+    function connectSse() {
+      if (state.ws) {
+        try { state.ws.close(); } catch {}
+        state.ws = null;
+      }
+      if (state.sse) {
+        try { state.sse.close(); } catch {}
+      }
+      state.streamMode = "sse";
+      const source = new EventSource("/sse/workspace");
+      state.sse = source;
+      showBanner(gridBanner, "warn", "WebSocket unavailable; streaming via SSE fallback.");
+      source.onopen = () => {
+        log(systemLog, "Workspace SSE connected.");
+      };
+      source.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleWsEvent(message);
+        } catch {
+          log(systemLog, "Failed to parse SSE event.");
+        }
+      };
+      source.onerror = () => {
+        log(systemLog, "Workspace SSE error; retrying in 2s.");
+        try { source.close(); } catch {}
+        state.sse = null;
+        setTimeout(() => {
+          if (!state.sse) connectSse();
+        }, 2000);
+      };
+    }
+
+    function handleWsEvent(envelope) {
+      const event = envelope.event;
+      const payload = envelope.payload || {};
+
+      if (event === "workspace.initial_state") {
+        state.workspaceKey = payload.workspace_key || state.workspaceKey;
+        state.columns = payload.columns || state.columns;
+        state.rows = payload.rows || state.rows;
+        state.connected = Boolean(payload.connected);
+        state.feedHealthy = Boolean(payload.feed_healthy);
+        for (const row of state.rows) {
+          state.rowData[row.row_id] = { ...row };
+        }
+        renderStatus();
+        renderColumnsEditor();
+        renderGrid();
+        return;
+      }
+
+      if (event === "market_data.snapshot") {
+        if (payload.row_id) {
+          state.rowData[payload.row_id] = { ...(state.rowData[payload.row_id] || {}), ...payload };
+          renderGrid();
+        }
+        return;
+      }
+
+      if (event === "market_data.status") {
+        state.connected = Boolean(payload.connected);
+        state.feedHealthy = Boolean(payload.feed_healthy);
+        renderStatus();
+        if (payload.reason) log(systemLog, `Feed status: ${payload.reason}`);
+        if (!state.connected || !state.feedHealthy) {
+          showBanner(orbBanner, "warn", "ORB is blocked while feed/connectivity is unhealthy.");
+        } else if (orbBanner.className.includes("warn") && orbBanner.textContent.includes("blocked")) {
+          clearBanner(orbBanner);
+        }
+        return;
+      }
+
+      if (event === "execution.status") {
+        if (payload.row_id) {
+          setOrbState(payload.row_id, payload);
+          renderGrid();
+        }
+        if (String(payload.state || "").toLowerCase() === "error") {
+          showBanner(orbBanner, "err", payload.detail || "ORB error.");
+        }
+        if (String(payload.state || "").toLowerCase() === "paused_stale") {
+          showBanner(orbBanner, "warn", "ORB paused due to stale feed/connectivity.");
+        }
+        log(orbLog, `${payload.state}${payload.row_id ? ` row=${payload.row_id}` : ""}${payload.trade_id ? ` trade=${payload.trade_id}` : ""}${payload.detail ? ` detail=${payload.detail}` : ""}`);
+        return;
+      }
+
+      if (event === "error") {
+        log(systemLog, `Error: ${payload.message || "unknown"}`);
+      }
+    }
+
+    document.getElementById("addRowBtn").onclick = () => addRow().catch((err) => log(systemLog, err.message));
+    document.getElementById("saveColumnsBtn").onclick = saveColumns;
+    document.getElementById("orbStartBtn").onclick = startOrb;
+    document.getElementById("orbStopSelectedBtn").onclick = stopOrbSelected;
+    document.getElementById("orbStopAllBtn").onclick = stopOrbAll;
+    document.getElementById("orbStatusBtn").onclick = refreshOrbStatus;
+    document.getElementById("refreshRuntimeBtn").onclick = refreshRuntimeStatus;
+    document.getElementById("armLiveBtn").onclick = armLive;
+    document.getElementById("strategyListBtn").onclick = () => { window.location.href = "/strategy-list"; };
+    document.getElementById("refreshReadinessBtn").onclick = refreshReadiness;
+    document.getElementById("switchProfileBtn").onclick = switchProfile;
+    document.getElementById("profileSelect").onchange = () => {
+      profileInstructions.textContent = instructionsForProfile(
+        document.getElementById("profileSelect").value,
+        state.readiness
+      );
+    };
+
+    reloadWorkspace()
+      .then(() => {
+        clearBanner(gridBanner);
+        clearBanner(orbBanner);
+        refreshRuntimeStatus();
+        refreshReadiness();
+        connectWs();
+      })
+      .catch((err) => {
+        const detail = parseErrorMessage(err);
+        showBanner(gridBanner, "err", detail);
+        log(systemLog, `Init failed: ${detail}`);
+      });
+  </script>
+</body>
+</html>

@@ -10,8 +10,9 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from app.api.routes import ControlPlaneRuntime, StrategyRegistry, build_router
+from app.api.routes import BrokerConnectionProfile, ControlPlaneRuntime, StrategyRegistry, build_router
 from app.config import Settings
+from app.domain.enums import EnvironmentMode
 from app.logging_setup import PeriodicMemoryLogger, create_periodic_memory_logger
 
 
@@ -55,6 +56,23 @@ def create_http_app(settings: Settings, dependencies: ApiDependencies | None = N
 
     app.state.settings = settings
     app.state.runtime = deps.runtime or ControlPlaneRuntime()
+    app.state.broker_profiles = (deps.app_state or {}).get(
+        "broker_profiles",
+        {
+            EnvironmentMode.PAPER: BrokerConnectionProfile(
+                host=settings.ibkr_paper_host or settings.ibkr_host,
+                port=settings.ibkr_paper_port or settings.ibkr_port,
+                client_id=settings.ibkr_paper_client_id or settings.ibkr_client_id,
+                account=settings.ibkr_paper_account or settings.ibkr_account,
+            ),
+            EnvironmentMode.LIVE: BrokerConnectionProfile(
+                host=settings.ibkr_live_host,
+                port=settings.ibkr_live_port,
+                client_id=settings.ibkr_live_client_id,
+                account=settings.ibkr_live_account or settings.ibkr_account,
+            ),
+        },
+    )
     app.state.strategy_registry = StrategyRegistry()
     app.state.contract_service = deps.contract_service
     app.state.pinned_contract_reader = deps.pinned_contract_reader

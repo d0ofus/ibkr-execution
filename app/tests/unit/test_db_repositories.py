@@ -12,6 +12,7 @@ from app.persistence.repositories import (
     SqlAlchemyAuditLogRepository,
     SqlAlchemyPinnedContractRepository,
     SqlAlchemyTradeRepository,
+    SqlAlchemyWorkspaceSettingsRepository,
 )
 
 
@@ -34,6 +35,7 @@ def test_schema_contains_required_tables() -> None:
     assert "trades" in table_names
     assert "audit_log" in table_names
     assert "pinned_contracts" in table_names
+    assert "workspace_settings" in table_names
 
 
 def test_trade_repository_crud() -> None:
@@ -139,3 +141,30 @@ def test_audit_log_repository_append_and_read() -> None:
     items = repo.list_events(limit=10)
     assert len(items) == 1
     assert items[0].id == event.id
+
+
+def test_workspace_settings_repository_upsert_and_get() -> None:
+    """Workspace settings are keyed by user/environment and can be updated."""
+    engine, session_factory = create_engine_and_session(_make_sqlite_url(_new_db_path("workspace")))
+    create_all_tables(engine)
+
+    repo = SqlAlchemyWorkspaceSettingsRepository(session_factory)
+    created = repo.upsert(
+        user_key="DU9999",
+        environment=EnvironmentMode.PAPER,
+        settings_json='{"rows":[],"columns":["last"]}',
+    )
+    assert created.id is not None
+    assert created.user_key == "DU9999"
+
+    fetched = repo.get(user_key="DU9999", environment=EnvironmentMode.PAPER)
+    assert fetched is not None
+    assert '"last"' in fetched.settings_json
+
+    updated = repo.upsert(
+        user_key="DU9999",
+        environment=EnvironmentMode.PAPER,
+        settings_json='{"rows":[{"row_id":"AAPL-1"}],"columns":["last","bid"]}',
+    )
+    assert updated.id == created.id
+    assert '"bid"' in updated.settings_json

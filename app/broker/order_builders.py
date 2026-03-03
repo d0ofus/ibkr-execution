@@ -137,3 +137,24 @@ def build_breakeven_adjustment_order(
         adjust_once=True,
         transmit=True,
     )
+
+
+def build_take_profit_order(
+    side: Side,
+    quantity: int,
+    limit_price: Decimal,
+    *,
+    time_in_force: TimeInForce = TimeInForce.DAY,
+) -> BrokerOrderSpec:
+    """Build a limit take-profit order specification."""
+    _require_positive_quantity(quantity)
+    _require_positive_price(limit_price, "limit_price")
+    return BrokerOrderSpec(
+        role=BrokerOrderRole.TAKE_PROFIT,
+        side=side,
+        quantity=quantity,
+        order_type="LMT",
+        time_in_force=time_in_force,
+        limit_price=limit_price,
+        transmit=True,
+    )

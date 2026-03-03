@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     ibkr_port: int = 7497
     ibkr_client_id: int = 1
     ibkr_account: str = ""
+    ibkr_paper_host: str = "127.0.0.1"
+    ibkr_paper_port: int = 4002
+    ibkr_paper_client_id: int = 1
+    ibkr_paper_account: str = ""
+    ibkr_live_host: str = "127.0.0.1"
+    ibkr_live_port: int = 4001
+    ibkr_live_client_id: int = 2
+    ibkr_live_account: str = ""
 
     database_url: str = "sqlite:///./ibkr_exec.db"
 

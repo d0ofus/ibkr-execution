@@ -80,6 +80,27 @@ class AuditLogOrm(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+class WorkspaceSettingsOrm(Base):
+    """ORM model for persisted workspace state by user/environment."""
+
+    __tablename__ = "workspace_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    environment: Mapped[str] = mapped_column(String(16), nullable=False)
+    settings_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    __table_args__ = (
+        Index(
+            "ux_workspace_settings_user_environment",
+            "user_key",
+            "environment",
+            unique=True,
+        ),
+    )
+
+
 def create_engine_and_session(
     database_url: str,
     *,
